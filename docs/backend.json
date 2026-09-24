@@ -1,0 +1,365 @@
+{
+  "entities": {
+    "Product": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Product",
+      "type": "object",
+      "description": "Represents a product in the inventory.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the product."
+        },
+        "productName": {
+          "type": "string",
+          "description": "Name of the product."
+        },
+        "category": {
+          "type": "string",
+          "description": "Category of the product."
+        },
+        "purchasePrice": {
+          "type": "number",
+          "description": "Purchase price of the product."
+        },
+        "sellingPrice": {
+          "type": "number",
+          "description": "Selling price of the product."
+        },
+        "stockQuantity": {
+          "type": "number",
+          "description": "Current stock quantity of the product."
+        },
+        "gstPercentage": {
+          "type": "number",
+          "description": "GST percentage applicable to the product."
+        }
+      },
+      "required": [
+        "id",
+        "productName",
+        "category",
+        "purchasePrice",
+        "sellingPrice",
+        "stockQuantity",
+        "gstPercentage"
+      ]
+    },
+    "Purchase": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Purchase",
+      "type": "object",
+      "description": "Represents a purchase entry from a supplier.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the purchase."
+        },
+        "supplierName": {
+          "type": "string",
+          "description": "Name of the supplier."
+        },
+        "invoiceNo": {
+          "type": "string",
+          "description": "Invoice number from the supplier."
+        },
+        "date": {
+          "type": "string",
+          "description": "Date of the purchase.",
+          "format": "date-time"
+        },
+        "productId": {
+          "type": "string",
+          "description": "Reference to Product. (Relationship: Purchase N:1 Product)"
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Quantity of the product purchased."
+        },
+        "purchasePrice": {
+          "type": "number",
+          "description": "Purchase price of the product at the time of purchase."
+        },
+        "gst": {
+          "type": "number",
+          "description": "GST amount for the purchase."
+        }
+      },
+      "required": [
+        "id",
+        "supplierName",
+        "invoiceNo",
+        "date",
+        "productId",
+        "quantity",
+        "purchasePrice",
+        "gst"
+      ]
+    },
+    "Sale": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Sale",
+      "type": "object",
+      "description": "Represents a sales invoice.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the sale."
+        },
+        "invoiceNumber": {
+          "type": "string",
+          "description": "Unique invoice number for the sale."
+        },
+        "date": {
+          "type": "string",
+          "description": "Date of the sale.",
+          "format": "date-time"
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Name of the customer (optional)."
+        },
+        "customerMobile": {
+          "type": "string",
+          "description": "Mobile number of the customer (optional)."
+        },
+        "subtotal": {
+          "type": "number",
+          "description": "Subtotal amount of the sale (before GST)."
+        },
+        "gst": {
+          "type": "number",
+          "description": "Total GST amount for the sale."
+        },
+        "total": {
+          "type": "number",
+          "description": "Total amount of the sale (including GST)."
+        },
+        "saleItems": {
+          "type": "array",
+          "description": "List of sale items. (Relationship: Sale 1:N SaleItem)",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "invoiceNumber",
+        "date",
+        "subtotal",
+        "gst",
+        "total",
+        "saleItems"
+      ]
+    },
+    "SaleItem": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SaleItem",
+      "type": "object",
+      "description": "Represents an item in a sales invoice.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the sale item."
+        },
+        "saleId": {
+          "type": "string",
+          "description": "Reference to Sale. (Relationship: Sale 1:N SaleItem)"
+        },
+        "productId": {
+          "type": "string",
+          "description": "Reference to Product. (Relationship: SaleItem N:1 Product)"
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Quantity of the product sold in this item."
+        },
+        "sellingPrice": {
+          "type": "number",
+          "description": "Selling price of the product at the time of sale."
+        },
+        "gst": {
+          "type": "number",
+          "description": "GST amount for the sale item."
+        }
+      },
+      "required": [
+        "id",
+        "saleId",
+        "productId",
+        "quantity",
+        "sellingPrice",
+        "gst"
+      ]
+    },
+    "Expense": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Expense",
+      "type": "object",
+      "description": "Represents a daily expense.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the expense."
+        },
+        "date": {
+          "type": "string",
+          "description": "Date of the expense.",
+          "format": "date-time"
+        },
+        "expenseType": {
+          "type": "string",
+          "description": "Type of expense (e.g., rent, electricity)."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount of the expense."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes about the expense (optional)."
+        }
+      },
+      "required": [
+        "id",
+        "date",
+        "expenseType",
+        "amount"
+      ]
+    },
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user of the application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the user."
+        },
+        "username": {
+          "type": "string",
+          "description": "Username of the user."
+        },
+        "role": {
+          "type": "string",
+          "description": "Role of the user (e.g., admin, editor, viewer)."
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "role"
+      ]
+    },
+    "Notification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Notification",
+      "type": "object",
+      "description": "Represents a user notification.",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the notification." },
+        "type": { "type": "string", "enum": ["overdue_invoice", "low_stock", "monthly_summary", "info"], "description": "Type of notification." },
+        "message": { "type": "string", "description": "The content of the notification message." },
+        "referenceId": { "type": "string", "description": "ID of the related document (e.g., sale or product ID)." },
+        "isRead": { "type": "boolean", "description": "Whether the user has read the notification." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp of when the notification was created." }
+      },
+      "required": ["id", "type", "message", "isRead", "createdAt"]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/products/{productId}",
+        "definition": {
+          "entityName": "Product",
+          "schema": { "$ref": "#/backend/entities/Product" },
+          "description": "Stores product information.",
+          "params": [{ "name": "productId", "description": "Unique identifier for the product." }]
+        }
+      },
+      {
+        "path": "/purchases/{purchaseId}",
+        "definition": {
+          "entityName": "Purchase",
+          "schema": { "$ref": "#/backend/entities/Purchase" },
+          "description": "Stores purchase entries.",
+          "params": [{ "name": "purchaseId", "description": "Unique identifier for the purchase entry." }]
+        }
+      },
+      {
+        "path": "/sales/{saleId}",
+        "definition": {
+          "entityName": "Sale",
+          "schema": { "$ref": "#/backend/entities/Sale" },
+          "description": "Stores sales invoices.",
+          "params": [{ "name": "saleId", "description": "Unique identifier for the sale invoice." }]
+        }
+      },
+      {
+        "path": "/sale_items/{saleItemId}",
+        "definition": {
+          "entityName": "SaleItem",
+          "schema": { "$ref": "#/backend/entities/SaleItem" },
+          "description": "Stores individual items within a sale invoice.",
+          "params": [{ "name": "saleItemId", "description": "Unique identifier for the sale item." }]
+        }
+      },
+      {
+        "path": "/expenses/{expenseId}",
+        "definition": {
+          "entityName": "Expense",
+          "schema": { "$ref": "#/backend/entities/Expense" },
+          "description": "Stores daily expense entries.",
+          "params": [{ "name": "expenseId", "description": "Unique identifier for the expense entry." }]
+        }
+      },
+      {
+        "path": "/users/{userId}",
+        "definition": {
+          "entityName": "User",
+          "schema": { "$ref": "#/backend/entities/User" },
+          "description": "Stores user information.",
+          "params": [{ "name": "userId", "description": "Unique identifier for the user." }]
+        }
+      },
+      {
+        "path": "/users/{userId}/notifications/{notificationId}",
+        "definition": {
+          "entityName": "Notification",
+          "schema": { "$ref": "#/backend/entities/Notification" },
+          "description": "Stores user-specific notifications.",
+          "params": [
+            { "name": "userId", "description": "The user's unique ID." },
+            { "name": "notificationId", "description": "The notification's unique ID." }
+          ]
+        }
+      },
+      {
+        "path": "/companyProfiles/{profileId}",
+        "definition": {
+          "entityName": "CompanyProfile",
+          "description": "Stores company profile information.",
+          "params": [{ "name": "profileId", "description": "Unique identifier for the company profile." }]
+        }
+      },
+      {
+        "path": "/counters/{counterId}",
+        "definition": {
+          "entityName": "Counter",
+          "description": "Stores counters for things like invoice numbers.",
+          "params": [{ "name": "counterId", "description": "The name of the counter (e.g., 'sales')." }]
+        }
+      }
+    ],
+    "reasoning": "The Firestore structure is designed to support the AutoBill PWA application, focusing on product, purchase, sales, expense management and user role based access control. It emphasizes authorization independence, clear access models, and predictable schema for maintainability and security. Since the shop owner is the primary user, all top level data is owned by the shop. The admin functionality is achieved using a 'role' field in the user document. User-specific data like notifications are stored in a subcollection under the user's document for security and scalability. The overall design prioritizes simplicity and scalability for a small business environment."
+  }
+}

@@ -1,0 +1,16 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Allow full CRUD access (read, write, create, update, delete, list) to any signed-in user
+    match /{document=**} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
+
+
