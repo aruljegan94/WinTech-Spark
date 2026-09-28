@@ -4,63 +4,61 @@
 
 @layer base {
   :root {
-    --background: 0 0% 99%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
+    --background: 226 24% 97%;         /* Crisp cool porcelain matte #f6f8fc */
+    --foreground: 226 35% 10%;         /* Deep ink #111827 */
+    --card: 0 0% 100%;                 /* Clean white matte */
+    --card-foreground: 226 35% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 352 92% 55%;           /* #F62440 Brand Crimson */
-    --primary-foreground: 0 0% 100%;  /* Pure White */
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 352 92% 96%;
-    --accent-foreground: 352 92% 45%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 352 92% 55%;
-    --radius: 0.75rem;
+    --popover-foreground: 226 35% 10%;
+    --primary: 246 80% 60%;            /* Electric Violet / Royal Indigo #6366f1 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 226 20% 93%;
+    --secondary-foreground: 226 35% 18%;
+    --muted: 226 20% 93%;
+    --muted-foreground: 226 12% 48%;
+    --accent: 246 80% 95%;             /* Soft violet tint */
+    --accent-foreground: 246 80% 45%;
+    --destructive: 350 84% 56%;        /* Rose / Crimson */
+    --destructive-foreground: 0 0% 100%;
+    --border: 226 16% 89%;             /* Ultra-crisp matte border */
+    --input: 226 16% 89%;
+    --ring: 246 80% 60%;
+    --radius: 0.625rem;
 
-    /* Multi-color status variables */
-    --success: 160 84% 39%;
+    --success: 160 84% 38%;            /* Emerald */
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
+    --warning: 38 92% 50%;             /* Amber */
     --warning-foreground: 0 0% 100%;
-    --info: 239 84% 67%;
+    --info: 195 88% 48%;               /* Spark Cyan */
     --info-foreground: 0 0% 100%;
   }
 
   .dark {
-    --background: 240 10% 4%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 7.5%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 8.5%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 352 92% 55%;           /* #F62440 Brand Crimson */
-    --primary-foreground: 0 0% 100%;  /* Pure White */
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 13%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 352 92% 15%;
-    --accent-foreground: 352 92% 75%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 18%;
-    --input: 240 3.7% 18%;
-    --ring: 352 92% 55%;
+    --background: 232 30% 6%;          /* Deep Obsidian #0a0d14 */
+    --foreground: 220 25% 96%;         /* Crisp silver-white #f1f5f9 */
+    --card: 230 25% 9%;                /* Velvety dark slate #101420 */
+    --card-foreground: 220 25% 96%;
+    --popover: 230 25% 10%;
+    --popover-foreground: 220 25% 96%;
+    --primary: 246 88% 65%;            /* Glowing Electric Violet #7571ff */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 230 20% 14%;
+    --secondary-foreground: 220 25% 90%;
+    --muted: 230 20% 13%;
+    --muted-foreground: 224 14% 60%;
+    --accent: 246 60% 18%;             /* Deep violet glow tint */
+    --accent-foreground: 246 90% 80%;
+    --destructive: 350 75% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 230 20% 15%;             /* 1px frosted obsidian border */
+    --input: 230 20% 15%;
+    --ring: 246 88% 65%;
 
-    /* Multi-color status variables dark */
-    --success: 160 84% 45%;
+    --success: 160 75% 44%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 55%;
+    --warning: 38 90% 54%;
     --warning-foreground: 0 0% 100%;
-    --info: 239 84% 72%;
+    --info: 195 90% 55%;               /* Glowing Cyan */
     --info-foreground: 0 0% 100%;
   }
 }
@@ -69,9 +67,48 @@
   * {
     @apply border-border;
   }
+
   body {
-    @apply bg-background text-foreground transition-colors duration-200;
-    font-feature-settings: 'rlig' 1, 'calt' 1;
-    letter-spacing: -0.01em;
+    /* Apply DM Sans as the primary interface font */
+    font-family: var(--font-sans), 'DM Sans', system-ui, -apple-system, sans-serif;
+    @apply bg-background text-foreground transition-colors duration-150;
+    font-size: 14px;                  /* Comfortable base for dashboard UI */
+    line-height: 1.5;
+    font-feature-settings: 'rlig' 1, 'calt' 1, 'ss01' 1;
+    font-optical-sizing: auto;
+    letter-spacing: -0.015em;         /* DM Sans looks great slightly tighter */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+
+  /* Headings — slightly tighter tracking */
+  h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.02em;
+    font-weight: 600;
+  }
+
+  /* Monospace numbers — use DM Mono for all ₹ amounts and tabular data */
+  .tabular-nums,
+  [class*="font-bold"][class*="text-"] {
+    font-feature-settings: 'tnum' 1, 'calt' 1;
+  }
+
+  /* Premium scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground/30; }
+}
+
+/* Mono font utility for rupee amounts */
+@layer utilities {
+  .font-mono-nums {
+    font-family: var(--font-mono), 'DM Mono', 'Fira Code', monospace;
+    font-feature-settings: 'tnum' 1;
+  }
+}
+
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
 }

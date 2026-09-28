@@ -1,24 +1,38 @@
 "use client";
 
 import { FirebaseClientProvider, useUser } from "@/firebase";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import AppShell from "@/components/layout/app-shell";
-import { Icons } from "@/components/icons";
+import { AppLoadingBar } from "@/components/ui/app-loading-bar";
 
 function InnerApp({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { isUserLoading } = useUser();
+  const router = useRouter();
+  const { user, isUserLoading } = useUser();
 
-  if (pathname === "/login") {
+  const isLoginRoute = pathname === "/login";
+
+  useEffect(() => {
+    // If auth state resolved and no user logged in, immediately redirect to /login
+    if (!isUserLoading && !user && !isLoginRoute) {
+      router.replace("/login");
+    }
+  }, [isUserLoading, user, isLoginRoute, router]);
+
+  // Login page renders directly
+  if (isLoginRoute) {
     return <>{children}</>;
   }
 
+  // Show the red & white loading bar with percentage during startup
   if (isUserLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <Icons.logo className="h-8 w-8 animate-spin" />
-      </div>
-    );
+    return <AppLoadingBar message="Starting WinTech-Spark..." />;
+  }
+
+  // If unauthenticated and redirecting to /login, show loader smoothly instead of blank screen
+  if (!user) {
+    return <AppLoadingBar message="Redirecting to login..." isComplete={true} />;
   }
 
   return <AppShell>{children}</AppShell>;

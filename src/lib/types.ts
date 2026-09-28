@@ -46,6 +46,21 @@ export type Purchase = {
   paymentNotes?: string;
 };
 
+export type Customer = {
+  id: string;
+  name: string; // Mandatory
+  mobile: string;
+  address?: string;
+  email?: string;
+  pendingDue: number; // Outstanding / credit balance to be collected
+  totalSpent: number; // Lifetime total sales value
+  totalInvoices: number; // Count of invoices
+  offers?: string; // Active discount or promotional offer notes
+  notes?: string;
+  createdAt: string; // ISO string
+  updatedAt?: string; // ISO string
+};
+
 export type SaleItem = {
   productId: string;
   productName: string;
@@ -56,11 +71,13 @@ export type SaleItem = {
 };
 
 export type Sale = {
-  id:string;
+  id: string;
   invoiceNumber: string;
   date: string;
+  customerId?: string;
   customerName?: string;
   customerMobile?: string;
+  customerAddress?: string;
   items: SaleItem[];
   subtotal: number;
   gstAmount: number;
@@ -70,7 +87,9 @@ export type Sale = {
   amountPaid?: number;
   status: 'Paid' | 'Pending' | 'Partial';
   dueDate?: string;
+  notes?: string;
 };
+
 
 export type Expense = {
   id: string;

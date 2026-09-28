@@ -63,11 +63,11 @@ export const FirebaseProvider: React.FC<FirebaseProviderProps> = ({
   firestore,
   auth,
 }) => {
-  const [userAuthState, setUserAuthState] = useState<UserAuthState>({
-    user: null,
-    isUserLoading: true, // Start loading until first auth event
+  const [userAuthState, setUserAuthState] = useState<UserAuthState>(() => ({
+    user: auth?.currentUser ?? null,
+    isUserLoading: !auth?.currentUser, // If user is already available synchronously, don't block
     userError: null,
-  });
+  }));
 
   // Effect to subscribe to Firebase auth state changes
   useEffect(() => {
@@ -76,19 +76,52 @@ export const FirebaseProvider: React.FC<FirebaseProviderProps> = ({
       return;
     }
 
-    setUserAuthState({ user: null, isUserLoading: true, userError: null }); // Reset on auth instance change
+    let isResolved = false;
+
+    // Safety timeout: prevents the app from being stuck indefinitely on startup if Firebase network/STS delays
+    const safetyTimeout = setTimeout(() => {
+      if (!isResolved) {
+        isResolved = true;
+        setUserAuthState({
+          user: auth.currentUser ?? null,
+          isUserLoading: false,
+          userError: null,
+        });
+      }
+    }, 1800);
 
     const unsubscribe = onAuthStateChanged(
       auth,
       (firebaseUser) => { // Auth state determined
+        isResolved = true;
+        clearTimeout(safetyTimeout);
         setUserAuthState({ user: firebaseUser, isUserLoading: false, userError: null });
       },
       (error) => { // Auth listener error
+        isResolved = true;
+        clearTimeout(safetyTimeout);
         console.error("FirebaseProvider: onAuthStateChanged error:", error);
         setUserAuthState({ user: null, isUserLoading: false, userError: error });
       }
     );
-    return () => unsubscribe(); // Cleanup
+
+    // Support auth.authStateReady() for modern Firebase SDKs to resolve initial state quickly
+    if (typeof (auth as any).authStateReady === 'function') {
+      (auth as any).authStateReady().then(() => {
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(safetyTimeout);
+          setUserAuthState({ user: auth.currentUser ?? null, isUserLoading: false, userError: null });
+        }
+      }).catch(() => {
+        // Fallback to onAuthStateChanged or safetyTimeout
+      });
+    }
+
+    return () => {
+      clearTimeout(safetyTimeout);
+      unsubscribe();
+    };
   }, [auth]); // Depends on the auth instance
 
   // Memoize the context value

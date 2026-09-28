@@ -8,7 +8,17 @@ declare module 'next-themes' {
     enableSystem?: boolean;
     themes?: string[];
     storageKey?: string;
+    disableTransitionOnChange?: boolean;
+    forcedTheme?: string;
   }
 
-  export function ThemeProvider(props: ThemeProviderProps): JSX.Element;
+  export function ThemeProvider(props: ThemeProviderProps): React.JSX.Element;
+  export function useTheme(): {
+    theme?: string;
+    setTheme: (theme: string) => void;
+    resolvedTheme?: string;
+    themes: string[];
+    systemTheme?: 'dark' | 'light';
+  };
 }
+

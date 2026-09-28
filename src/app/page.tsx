@@ -1,14 +1,5 @@
-'use client';
-
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { redirect } from 'next/navigation';
 
 export default function AppRootPage() {
-  const router = useRouter();
-
-  useEffect(() => {
-    router.replace('/dashboard');
-  }, [router]);
-
-  return null; // or a loading spinner
+  redirect('/dashboard');
 }

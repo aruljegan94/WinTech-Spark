@@ -1,13 +1,21 @@
 import "./globals.css";
-import { Roboto } from "next/font/google";
+import { DM_Sans, DM_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/layout/theme-provider";
 import { Toaster } from "@/components/ui/toaster";
 import ClientRoot from "./client-root";
 
-const fontSans = Roboto({
+const fontSans = DM_Sans({
   subsets: ["latin"],
   variable: "--font-sans",
-  weight: ["300", "400", "500", "700"],
+  weight: ["300", "400", "500", "600", "700"],
+  display: "swap",
+});
+
+const fontMono = DM_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  weight: ["300", "400", "500"],
+  display: "swap",
 });
 
 export default function RootLayout({
@@ -25,7 +33,7 @@ export default function RootLayout({
         />
         <link rel="manifest" href="/manifest.json" />
       </head>
-      <body className={fontSans.variable}>
+      <body className={`${fontSans.variable} ${fontMono.variable}`}>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

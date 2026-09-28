@@ -25,13 +25,36 @@ import { useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlo
 import {
   collection,
   doc,
+  setDoc,
   runTransaction,
   query,
   where,
 } from 'firebase/firestore';
-import type { Product, SaleItem, CompanyProfile } from '@/lib/types';
-import { CalendarIcon, PlusCircle, Trash2, Settings2, ScanBarcode } from 'lucide-react';
+import type { Product, SaleItem, CompanyProfile, Customer } from '@/lib/types';
+import {
+  CalendarIcon,
+  PlusCircle,
+  Trash2,
+  Settings2,
+  ScanBarcode,
+  UserCheck,
+  Tag,
+  Wallet,
+  Check,
+  X,
+  Plus,
+  Phone,
+  MapPin,
+} from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -62,8 +85,22 @@ type SaleItemFormValues = z.infer<typeof saleItemSchema>;
 
 export default function NewInvoicePage() {
   const [items, setItems] = useState<SaleItem[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [customerName, setCustomerName] = useState('');
   const [customerMobile, setCustomerMobile] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [saveToCustomerDb, setSaveToCustomerDb] = useState(true);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Quick Add Customer modal
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [quickAddName, setQuickAddName] = useState('');
+  const [quickAddMobile, setQuickAddMobile] = useState('');
+  const [quickAddAddress, setQuickAddAddress] = useState('');
+  const [quickAddOffers, setQuickAddOffers] = useState('');
+  const [quickAddDue, setQuickAddDue] = useState('');
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+
   const [invoiceDate, setInvoiceDate] = useState<Date>(new Date());
   
   const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Partial' | 'Pending'>('Paid');
@@ -88,6 +125,12 @@ export default function NewInvoicePage() {
   const { data: products, isLoading: productsLoading } =
     useCollection<Product>(productsQuery);
 
+  const customersQuery = useMemoFirebase(
+    () => (firestore ? collection(firestore, 'customers') : null),
+    [firestore]
+  );
+  const { data: customers } = useCollection<Customer>(customersQuery);
+
   const defaultProfileQuery = useMemoFirebase(
     () => (firestore ? query(collection(firestore, 'companyProfiles'), where('isDefault', '==', true)) : null),
     [firestore]
@@ -101,6 +144,101 @@ export default function NewInvoicePage() {
     [firestore]
   );
   const { data: salesCounter } = useDoc<{currentNumber: number}>(salesCounterRef);
+
+  // Check URL query parameters for customerId (e.g. redirected from Customers page)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const cId = params.get('customerId');
+      if (cId) {
+        setSelectedCustomerId(cId);
+      }
+    }
+  }, []);
+
+  const selectedCustomer = useMemo(() => {
+    if (!selectedCustomerId || !customers) return null;
+    return customers.find((c) => c.id === selectedCustomerId) || null;
+  }, [selectedCustomerId, customers]);
+
+  useEffect(() => {
+    if (selectedCustomer) {
+      setCustomerName(selectedCustomer.name);
+      setCustomerMobile(selectedCustomer.mobile || '');
+      setCustomerAddress(selectedCustomer.address || '');
+    }
+  }, [selectedCustomer]);
+
+  const matchingCustomers = useMemo(() => {
+    if (!customers || selectedCustomerId || !customerName.trim()) return [];
+    const q = customerName.toLowerCase().trim();
+    return customers.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.mobile && c.mobile.includes(q))
+    );
+  }, [customers, selectedCustomerId, customerName]);
+
+  const handleSelectCustomer = (customer: Customer) => {
+    setSelectedCustomerId(customer.id);
+    setCustomerName(customer.name);
+    setCustomerMobile(customer.mobile || '');
+    setCustomerAddress(customer.address || '');
+    setShowSuggestions(false);
+  };
+
+  const handleClearSelectedCustomer = () => {
+    setSelectedCustomerId('');
+    setCustomerName('');
+    setCustomerMobile('');
+    setCustomerAddress('');
+    setShowSuggestions(false);
+  };
+
+  const handleQuickAddCustomer = async () => {
+    if (!firestore || !quickAddName.trim()) {
+      toast({ variant: 'destructive', title: 'Customer name is required' });
+      return;
+    }
+    setIsSavingCustomer(true);
+    try {
+      const now = new Date().toISOString();
+      const newCustRef = doc(collection(firestore, 'customers'));
+      const newCust: Customer = {
+        id: newCustRef.id,
+        name: quickAddName.trim(),
+        mobile: quickAddMobile.trim(),
+        address: quickAddAddress.trim(),
+        pendingDue: parseFloat(quickAddDue) || 0,
+        totalSpent: 0,
+        totalInvoices: 0,
+        offers: quickAddOffers.trim(),
+        notes: '',
+        createdAt: now,
+        updatedAt: now,
+      };
+      await setDoc(newCustRef, newCust);
+      setSelectedCustomerId(newCustRef.id);
+      setCustomerName(newCust.name);
+      setCustomerMobile(newCust.mobile);
+      setCustomerAddress(newCust.address || '');
+      setIsQuickAddOpen(false);
+      setQuickAddName('');
+      setQuickAddMobile('');
+      setQuickAddAddress('');
+      setQuickAddOffers('');
+      setQuickAddDue('');
+      toast({
+        title: 'Customer Created & Selected',
+        description: `${newCust.name} added to database and linked to this invoice.`,
+      });
+    } catch (err: any) {
+      toast({ variant: 'destructive', title: 'Failed to create customer', description: err.message });
+    } finally {
+      setIsSavingCustomer(false);
+    }
+  };
+
 
   useEffect(() => {
     if (defaultProfile) {
@@ -276,6 +414,10 @@ export default function NewInvoicePage() {
               const productDocsPromises = items.map(item => transaction.get(doc(firestore, 'products', item.productId)));
               const productDocs = await Promise.all(productDocsPromises);
 
+              const customerDoc = selectedCustomer
+                ? await transaction.get(doc(firestore, 'customers', selectedCustomer.id))
+                : null;
+
               // --- 2. LOGIC PHASE ---
               let newCount = 1;
               if (counterDoc.exists()) {
@@ -304,6 +446,15 @@ export default function NewInvoicePage() {
                   });
               }
 
+              const invoicePendingDue =
+                paymentStatus === 'Pending'
+                  ? total
+                  : paymentStatus === 'Partial'
+                  ? Math.max(0, total - (amountPaid || 0))
+                  : 0;
+
+              let finalCustomerId = selectedCustomer?.id || '';
+
               // --- 3. WRITE PHASE ---
               transaction.set(counterRef, { currentNumber: newCount }, { merge: true });
 
@@ -311,11 +462,42 @@ export default function NewInvoicePage() {
                   transaction.update(update.ref, { stockQuantity: update.newStock });
               }
 
+              const now = new Date().toISOString();
+              if (selectedCustomer && customerDoc && customerDoc.exists()) {
+                const cData = customerDoc.data();
+                transaction.update(customerDoc.ref, {
+                  totalSpent: (cData.totalSpent || 0) + total,
+                  totalInvoices: (cData.totalInvoices || 0) + 1,
+                  pendingDue: (cData.pendingDue || 0) + invoicePendingDue,
+                  address: customerAddress.trim() || cData.address || '',
+                  mobile: customerMobile.trim() || cData.mobile || '',
+                  updatedAt: now,
+                });
+              } else if (saveToCustomerDb && customerName.trim() && customerName.trim() !== 'N/A') {
+                const newCustRef = doc(collection(firestore, 'customers'));
+                finalCustomerId = newCustRef.id;
+                transaction.set(newCustRef, {
+                  id: newCustRef.id,
+                  name: customerName.trim(),
+                  mobile: customerMobile.trim(),
+                  address: customerAddress.trim(),
+                  pendingDue: invoicePendingDue,
+                  totalSpent: total,
+                  totalInvoices: 1,
+                  offers: '',
+                  notes: '',
+                  createdAt: now,
+                  updatedAt: now,
+                });
+              }
+
               transaction.set(newInvoiceRef, {
                   invoiceNumber,
                   date: invoiceDate.toISOString(),
+                  customerId: finalCustomerId || undefined,
                   customerName: customerName || 'N/A',
                   customerMobile: customerMobile || '',
+                  customerAddress: customerAddress || '',
                   items,
                   subtotal,
                   gstAmount,
@@ -325,6 +507,7 @@ export default function NewInvoicePage() {
                   amountPaid: paymentStatus === 'Partial' ? amountPaid : total,
               });
           });
+
 
           toast({
               title: 'Invoice Created',
@@ -558,29 +741,184 @@ export default function NewInvoicePage() {
         </div>
         <div className="grid auto-rows-max items-start gap-4">
           <Card>
-            <CardHeader>
-              <CardTitle>Customer Details</CardTitle>
-              <CardDescription>(Optional)</CardDescription>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <div>
+                <CardTitle className="text-base">Customer Details</CardTitle>
+                <CardDescription className="text-xs">
+                  {selectedCustomer ? 'Registered Customer Selected' : 'Search database or enter walk-in details'}
+                </CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1 text-xs"
+                onClick={() => setIsQuickAddOpen(true)}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New Customer
+              </Button>
             </CardHeader>
-            <CardContent className="grid gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="customer-name">Name</Label>
-                <Input
-                  id="customer-name"
-                  placeholder="Enter customer name"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="customer-mobile">Mobile</Label>
-                <Input
-                  id="customer-mobile"
-                  placeholder="Enter mobile number"
-                  value={customerMobile}
-                  onChange={(e) => setCustomerMobile(e.target.value)}
-                />
-              </div>
+            <CardContent className="grid gap-3 pt-2">
+              {selectedCustomer ? (
+                /* Selected Customer View */
+                <div className="rounded-lg border bg-muted/30 p-3 space-y-2.5">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-8 w-8 rounded-full bg-primary/10 text-primary font-semibold flex items-center justify-center text-xs uppercase">
+                        {selectedCustomer.name.slice(0, 2)}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-sm leading-tight flex items-center gap-1.5">
+                          {selectedCustomer.name}
+                          <UserCheck className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+                        </div>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {selectedCustomer.mobile || 'No phone'}
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                      onClick={handleClearSelectedCustomer}
+                    >
+                      <X className="h-3.5 w-3.5 mr-1" />
+                      Change
+                    </Button>
+                  </div>
+
+                  {selectedCustomer.address && (
+                    <div className="flex items-start gap-1 text-xs text-muted-foreground">
+                      <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
+                      <span className="line-clamp-1">{selectedCustomer.address}</span>
+                    </div>
+                  )}
+
+                  {/* Active Offers Banner */}
+                  {selectedCustomer.offers && (
+                    <div className="rounded-md bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 p-2 text-xs flex items-center gap-2 text-purple-900 dark:text-purple-200">
+                      <Tag className="h-3.5 w-3.5 shrink-0 text-purple-600" />
+                      <div className="leading-tight">
+                        <strong>Active Offer:</strong> {selectedCustomer.offers}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pending Due / Credit Alert */}
+                  {(selectedCustomer.pendingDue || 0) > 0 ? (
+                    <div className="rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 p-2 text-xs flex items-center gap-2 text-amber-900 dark:text-amber-200">
+                      <Wallet className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      <div className="leading-tight">
+                        <strong>Outstanding Due:</strong> ₹{(selectedCustomer.pendingDue || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-emerald-600 flex items-center gap-1 font-medium">
+                      <Check className="h-3 w-3" /> No pending credit due
+                    </div>
+                  )}
+
+                  <div className="text-[11px] text-muted-foreground pt-1 border-t flex justify-between">
+                    <span>Lifetime Business:</span>
+                    <span className="font-medium text-foreground">
+                      ₹{(selectedCustomer.totalSpent || 0).toLocaleString('en-IN')} ({selectedCustomer.totalInvoices || 0} bills)
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                /* Unselected / Walk-in / Search Mode */
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Label htmlFor="customer-name" className="text-xs">Customer Name</Label>
+                    <div className="relative mt-1">
+                      <Input
+                        id="customer-name"
+                        placeholder="Type name or search existing customer..."
+                        value={customerName}
+                        onChange={(e) => {
+                          setCustomerName(e.target.value);
+                          setShowSuggestions(true);
+                        }}
+                        onFocus={() => setShowSuggestions(true)}
+                        autoComplete="off"
+                      />
+                    </div>
+
+                    {/* Dropdown Suggestions */}
+                    {showSuggestions && matchingCustomers.length > 0 && (
+                      <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-popover text-popover-foreground border rounded-md shadow-lg max-h-52 overflow-y-auto p-1 divide-y">
+                        <div className="text-[11px] font-medium text-muted-foreground px-2 py-1">
+                          Existing Customers in Database:
+                        </div>
+                        {matchingCustomers.slice(0, 6).map((c) => (
+                          <div
+                            key={c.id}
+                            onMouseDown={() => handleSelectCustomer(c)}
+                            className="flex items-center justify-between p-2 hover:bg-accent rounded-sm cursor-pointer text-xs"
+                          >
+                            <div>
+                              <div className="font-semibold text-foreground">{c.name}</div>
+                              <div className="text-muted-foreground text-[11px]">
+                                {c.mobile || 'No phone'} {c.address ? `• ${c.address}` : ''}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              {(c.pendingDue || 0) > 0 && (
+                                <span className="text-amber-600 font-medium block">
+                                  Due: ₹{c.pendingDue}
+                                </span>
+                              )}
+                              {c.offers && (
+                                <span className="text-purple-600 block text-[10px]">
+                                  🎁 {c.offers}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="customer-mobile" className="text-xs">Mobile Number</Label>
+                    <Input
+                      id="customer-mobile"
+                      placeholder="e.g. 9876543210"
+                      value={customerMobile}
+                      onChange={(e) => setCustomerMobile(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="customer-address" className="text-xs">Address / Location (Optional)</Label>
+                    <Input
+                      id="customer-address"
+                      placeholder="e.g. City / Area"
+                      value={customerAddress}
+                      onChange={(e) => setCustomerAddress(e.target.value)}
+                    />
+                  </div>
+
+                  {customerName.trim() && (
+                    <div className="flex items-center space-x-2 pt-1 border-t">
+                      <input
+                        type="checkbox"
+                        id="save-customer"
+                        checked={saveToCustomerDb}
+                        onChange={(e) => setSaveToCustomerDb(e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      />
+                      <label htmlFor="save-customer" className="text-xs text-muted-foreground cursor-pointer">
+                        Save <strong className="text-foreground">{customerName}</strong> to Customers directory for future credit & offer tracking
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
            <Card>
@@ -672,6 +1010,96 @@ export default function NewInvoicePage() {
         </div>
       </div>
 
+      {/* Quick Add Customer Dialog */}
+      <Dialog open={isQuickAddOpen} onOpenChange={setIsQuickAddOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Quick Register Customer</DialogTitle>
+            <DialogDescription>
+              Create and link a new customer without leaving this invoice.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="qa-name" className="text-xs">
+                Customer Name <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="qa-name"
+                placeholder="Full Name"
+                value={quickAddName}
+                onChange={(e) => setQuickAddName(e.target.value)}
+                autoFocus
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="qa-mobile" className="text-xs">Mobile Number</Label>
+                <Input
+                  id="qa-mobile"
+                  placeholder="Phone"
+                  value={quickAddMobile}
+                  onChange={(e) => setQuickAddMobile(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="qa-due" className="text-xs">Opening Due (₹)</Label>
+                <Input
+                  id="qa-due"
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={quickAddDue}
+                  onChange={(e) => setQuickAddDue(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="qa-address" className="text-xs">Address / Location</Label>
+              <Input
+                id="qa-address"
+                placeholder="Street / City"
+                value={quickAddAddress}
+                onChange={(e) => setQuickAddAddress(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="qa-offers" className="text-xs">Special Offer / Discount Note</Label>
+              <Input
+                id="qa-offers"
+                placeholder="e.g. 5% Discount / VIP"
+                value={quickAddOffers}
+                onChange={(e) => setQuickAddOffers(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsQuickAddOpen(false)}
+              disabled={isSavingCustomer}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleQuickAddCustomer}
+              disabled={isSavingCustomer}
+              className="gap-2"
+            >
+              {isSavingCustomer && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save & Link Customer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <BarcodeScannerModal
         isOpen={isScannerOpen}
         onOpenChange={setIsScannerOpen}
@@ -681,3 +1109,4 @@ export default function NewInvoicePage() {
     </>
   );
 }
+

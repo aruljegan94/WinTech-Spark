@@ -30,7 +30,7 @@ const LiveClock = memo(function LiveClock() {
     return () => clearInterval(timer);
   }, []);
   return (
-    <p className="text-xs text-muted-foreground">
+    <p className="text-[10px] text-muted-foreground tracking-wide">
       {format(currentDateTime, 'eeee, dd-MMM-yyyy | hh:mm:ss a')}
     </p>
   );
@@ -62,11 +62,11 @@ export function AppHeader({ user: currentUserDoc }: AppHeaderProps) {
   };
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b bg-background px-4 sm:px-6">
-      <SidebarTrigger className="md:hidden" />
+    <header className="sticky top-0 z-30 flex h-12 items-center gap-3 border-b bg-card px-3 sm:px-4">
+      <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
       
-      <div className="hidden md:flex flex-col">
-        <h1 className="text-lg font-semibold">Welcome, {currentUserDoc?.name || 'User'}!</h1>
+      <div className="hidden md:flex flex-col leading-none">
+        <h1 className="text-sm font-semibold tracking-tight">Welcome, {currentUserDoc?.name || 'User'}</h1>
         <LiveClock />
       </div>
 

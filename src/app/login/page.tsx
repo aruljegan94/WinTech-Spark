@@ -18,6 +18,7 @@ import { useAuth, useUser } from '@/firebase';
 import { signInWithEmailAndPassword, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
 import Image from 'next/image';
+import { AppLoadingBar } from '@/components/ui/app-loading-bar';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -77,11 +78,7 @@ export default function LoginPage() {
   // Show a loading state while checking auth status.
   // This also prevents a flash of the login form if the user is already logged in.
   if (isUserLoading) {
-      return (
-          <div className="flex min-h-screen w-full items-center justify-center bg-background">
-              <Loader2 className="h-8 w-8 animate-spin" />
-          </div>
-      )
+    return <AppLoadingBar message="Verifying session..." />;
   }
   
   // Only show the login page if there's no user and auth is not loading.
