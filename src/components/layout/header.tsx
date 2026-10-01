@@ -21,6 +21,7 @@ import type { User } from '@/lib/types';
 import { useState, useEffect, memo } from 'react';
 import { format } from 'date-fns';
 import { NotificationCenter } from '../notifications/notification-center';
+import { GlobalSearch } from './global-search';
 
 // Isolated clock component — re-renders every second but doesn't propagate to AppHeader
 const LiveClock = memo(function LiveClock() {
@@ -70,9 +71,10 @@ export function AppHeader({ user: currentUserDoc }: AppHeaderProps) {
         <LiveClock />
       </div>
 
-      <div className="relative ml-auto flex items-center gap-2 md:grow-0">
+      <div className="relative ml-auto flex items-center gap-2">
+        <GlobalSearch />
         <ThemeToggle />
-         <NotificationCenter />
+        <NotificationCenter />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -88,10 +90,18 @@ export function AppHeader({ user: currentUserDoc }: AppHeaderProps) {
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>{currentUserDoc?.name || 'My Account'}</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Settings</DropdownMenuItem>
-            <DropdownMenuItem>Support</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push('/settings')}>
+              Settings & Profile
+            </DropdownMenuItem>
+            {currentUserDoc?.role === 'Admin' && (
+              <DropdownMenuItem onClick={() => router.push('/admin')}>
+                Admin Panel
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout}>Logout</DropdownMenuItem>
+            <DropdownMenuItem onClick={handleLogout} className="text-red-600">
+              Logout
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

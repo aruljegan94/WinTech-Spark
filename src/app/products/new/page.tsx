@@ -27,8 +27,9 @@ import { useFirestore, addDocumentNonBlocking } from '@/firebase';
 import { collection } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
-import { ScanBarcode } from 'lucide-react';
+import { ScanBarcode, Package } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
+import { ProductPricingCard } from '@/components/products/product-pricing-card';
 
 const productSchema = z.object({
   productName: z.string().min(1, 'Product name is required'),
@@ -38,6 +39,7 @@ const productSchema = z.object({
   stockQuantity: z.coerce.number().int().min(0, 'Stock must be a whole number'),
   gstPercentage: z.coerce.number().min(0).max(100, 'GST must be between 0 and 100'),
   barcode: z.string().optional(),
+  markupPercentage: z.coerce.number().optional(),
 });
 
 type ProductFormValues = z.infer<typeof productSchema>;
@@ -58,6 +60,7 @@ export default function NewProductPage() {
       stockQuantity: 0,
       gstPercentage: 0,
       barcode: '',
+      markupPercentage: 30,
     },
   });
 
@@ -70,7 +73,7 @@ export default function NewProductPage() {
 
       toast({
         title: 'Product Added',
-        description: `${data.productName} has been successfully added.`,
+        description: `${data.productName} has been successfully added to your inventory.`,
       });
       router.push('/products');
     } catch (error) {
@@ -87,24 +90,30 @@ export default function NewProductPage() {
     <>
       <PageHeader
         title="Add New Product"
-        description="Fill out the form to add a new product to your inventory."
+        description="Fill out the details below. Selling price is automatically generated using standard markup."
       />
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+          {/* Card 1: Product Information */}
           <Card>
-            <CardHeader>
-              <CardTitle>Product Details</CardTitle>
+            <CardHeader className="pb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-md bg-muted text-foreground">
+                  <Package className="h-4 w-4" />
+                </div>
+                <CardTitle className="text-lg">Product Details & Identification</CardTitle>
+              </div>
               <CardDescription>
-                Enter the information for the new product.
+                Basic information, barcode/SKU, and starting inventory count.
               </CardDescription>
             </CardHeader>
-            <CardContent className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <CardContent className="grid grid-cols-1 gap-5 md:grid-cols-2">
               <FormField
                 control={form.control}
                 name="productName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Product Name</FormLabel>
+                    <FormLabel>Product Name *</FormLabel>
                     <FormControl>
                       <Input placeholder="e.g., Engine Oil 5L" {...field} />
                     </FormControl>
@@ -117,9 +126,9 @@ export default function NewProductPage() {
                 name="category"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Category</FormLabel>
+                    <FormLabel>Category *</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., Lubricants" {...field} />
+                      <Input placeholder="e.g., Lubricants, Spares, Electronics" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -140,14 +149,14 @@ export default function NewProductPage() {
                         type="button"
                         variant="outline"
                         onClick={() => setIsScannerOpen(true)}
-                        className="gap-1 shrink-0"
+                        className="gap-1.5 shrink-0"
                       >
                         <ScanBarcode className="h-4 w-4" />
                         Scan
                       </Button>
                     </div>
                     <FormDescription>
-                      Scan using a barcode gun or camera to assign a barcode to this product.
+                      Scan using camera or barcode gun to assign a barcode.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -156,38 +165,12 @@ export default function NewProductPage() {
 
               <FormField
                 control={form.control}
-                name="purchasePrice"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Purchase Price (₹)</FormLabel>
-                    <FormControl>
-                      <Input type="number" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="sellingPrice"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Selling Price (₹)</FormLabel>
-                    <FormControl>
-                      <Input type="number" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
                 name="stockQuantity"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Stock Quantity</FormLabel>
+                    <FormLabel>Initial Stock Quantity</FormLabel>
                     <FormControl>
-                      <Input type="number" {...field} />
+                      <Input type="number" min="0" placeholder="0" {...field} />
                     </FormControl>
                     <FormDescription>
                       The current number of units in stock.
@@ -196,26 +179,20 @@ export default function NewProductPage() {
                   </FormItem>
                 )}
               />
-              <FormField
-                control={form.control}
-                name="gstPercentage"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>GST (%)</FormLabel>
-                    <FormControl>
-                      <Input type="number" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
             </CardContent>
           </Card>
-          <div className="flex justify-end gap-2">
+
+          {/* Card 2: Pricing & Profit Margin (Auto-Calculated) */}
+          <ProductPricingCard form={form} />
+
+          {/* Form Actions */}
+          <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="outline" onClick={() => router.back()}>
               Cancel
             </Button>
-            <Button type="submit">Save Product</Button>
+            <Button type="submit" size="lg" className="min-w-[140px]">
+              Save Product
+            </Button>
           </div>
         </form>
       </Form>

@@ -25,35 +25,21 @@ import {
 import {
   Settings2, Database, Barcode, Calculator, Users, Bell, Gift, Download,
   Trash2, Plus, Pencil, CheckCircle2, TrendingUp, TrendingDown, Loader2,
-  ShieldAlert, Package, AlertCircle, PartyPopper, Save, RefreshCw, X,
+  ShieldAlert, Package, AlertCircle, PartyPopper, Save, RefreshCw, X, Building2,
+  Upload, Printer, IndianRupee, MessageCircle, ArrowRight, ExternalLink, HelpCircle,
+  Receipt
 } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import {
   collection, doc, setDoc, deleteDoc, getDocs, writeBatch, query, orderBy,
 } from 'firebase/firestore';
-import type { Employee, AppSettings } from '@/lib/types';
+import type { Employee, AppSettings, CompanyProfile } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 import { format, differenceInDays, parseISO } from 'date-fns';
+import { BusinessProfileSettings } from './_components/business-profile-settings';
+import { generateBarcodeSVG } from '@/lib/barcode-generator';
+import Link from 'next/link';
 
-// ─── Barcode Generator using canvas ───────────────────────────────────────────
-function generateBarcodeSVG(text: string): string {
-  // Simple Code128-like visual using bars (visual only, not scannable standard)
-  const bars = text.split('').map((c) => c.charCodeAt(0).toString(2).padStart(8, '0')).join('');
-  const width = Math.max(bars.length * 2 + 40, 200);
-  let rects = '';
-  bars.split('').forEach((bit, i) => {
-    if (bit === '1') {
-      rects += `<rect x="${20 + i * 2}" y="10" width="2" height="60" fill="black"/>`;
-    }
-  });
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="90" viewBox="0 0 ${width} 90">
-    <rect width="${width}" height="90" fill="white"/>
-    ${rects}
-    <text x="${width / 2}" y="82" text-anchor="middle" font-family="monospace" font-size="11" fill="#333">${text}</text>
-  </svg>`;
-}
-
-// ─── Employee Dialog ───────────────────────────────────────────────────────────
 const EMPTY_EMP: Omit<Employee, 'id'> = {
   name: '', designation: '', phone: '', email: '',
   dateOfBirth: '', dateOfJoining: '', salary: 0, notes: '',
@@ -62,6 +48,21 @@ const EMPTY_EMP: Omit<Employee, 'id'> = {
 export default function SettingsPage() {
   const firestore = useFirestore();
   const { toast } = useToast();
+
+  // ── Database Record Counters ──────────────────────────────────────────────
+  const productsQuery = useMemoFirebase(() => firestore ? collection(firestore, 'products') : null, [firestore]);
+  const salesQuery = useMemoFirebase(() => firestore ? collection(firestore, 'sales') : null, [firestore]);
+  const purchasesQuery = useMemoFirebase(() => firestore ? collection(firestore, 'purchases') : null, [firestore]);
+  const expensesQuery = useMemoFirebase(() => firestore ? collection(firestore, 'expenses') : null, [firestore]);
+  const customersQuery = useMemoFirebase(() => firestore ? collection(firestore, 'customers') : null, [firestore]);
+  const vendorsQuery = useMemoFirebase(() => firestore ? collection(firestore, 'vendors') : null, [firestore]);
+
+  const { data: products } = useCollection(productsQuery);
+  const { data: sales } = useCollection(salesQuery);
+  const { data: purchases } = useCollection(purchasesQuery);
+  const { data: expenses } = useCollection(expensesQuery);
+  const { data: customers } = useCollection(customersQuery);
+  const { data: vendors } = useCollection(vendorsQuery);
 
   // ── Employees ──────────────────────────────────────────────────────────────
   const empQuery = useMemoFirebase(
@@ -76,6 +77,12 @@ export default function SettingsPage() {
   const [empSaving, setEmpSaving] = useState(false);
   const [deleteEmpId, setDeleteEmpId] = useState<string | null>(null);
 
+  // ── General Preferences (Invoice numbering, Print format, etc) ───────────
+  const [invoicePrefix, setInvoicePrefix] = useState('INV-');
+  const [defaultPrintMode, setDefaultPrintMode] = useState<'thermal-80' | 'thermal-58' | 'a4'>('thermal-80');
+  const [defaultPaymentMode, setDefaultPaymentMode] = useState('Cash');
+  const [savingGeneral, setSavingGeneral] = useState(false);
+
   // ── Notification Settings ─────────────────────────────────────────────────
   const [notifSettings, setNotifSettings] = useState<Omit<AppSettings, 'id'>>({
     lowStockAlerts: true,
@@ -85,29 +92,70 @@ export default function SettingsPage() {
   });
   const [savingNotif, setSavingNotif] = useState(false);
 
-  // ── Barcode ───────────────────────────────────────────────────────────────
-  const [barcodeText, setBarcodeText] = useState('');
-  const [barcodeProductName, setBarcodeProductName] = useState('');
+  // ── Barcode Quick Generator ───────────────────────────────────────────────
+  const [barcodeText, setBarcodeText] = useState('8901234567890');
+  const [barcodeProductName, setBarcodeProductName] = useState('RALCO Tyre Tube');
   const [barcodeSvg, setBarcodeSvg] = useState('');
 
-  // ── Profit Calculator ─────────────────────────────────────────────────────
-  const [costPrice, setCostPrice] = useState('');
-  const [sellingPrice, setSellingPrice] = useState('');
+  // ── Smart Margin & Profit Simulator ───────────────────────────────────────
+  const [costPrice, setCostPrice] = useState('450');
+  const [sellingPrice, setSellingPrice] = useState('650');
+  const [targetMarginPct, setTargetMarginPct] = useState('30');
   const [gstPct, setGstPct] = useState('18');
 
   // ── Data Management ───────────────────────────────────────────────────────
   const [clearTarget, setClearTarget] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Profit Calc derived values ─────────────────────────────────────────────
+  // Load existing app settings
+  useEffect(() => {
+    if (!firestore) return;
+    const fetchSettings = async () => {
+      try {
+        const snap = await getDocs(collection(firestore, 'settings'));
+        snap.forEach((docSnap) => {
+          if (docSnap.id === 'app') {
+            const data = docSnap.data();
+            setNotifSettings((prev) => ({
+              ...prev,
+              ...data,
+            }));
+            if (data.invoicePrefix) setInvoicePrefix(data.invoicePrefix);
+            if (data.defaultPrintMode) setDefaultPrintMode(data.defaultPrintMode);
+            if (data.defaultPaymentMode) setDefaultPaymentMode(data.defaultPaymentMode);
+          }
+        });
+      } catch (e) {
+        console.error('Error fetching settings:', e);
+      }
+    };
+    fetchSettings();
+  }, [firestore]);
+
+  // Initial barcode render
+  useEffect(() => {
+    try {
+      setBarcodeSvg(generateBarcodeSVG(barcodeText, { height: 60, showText: true }));
+    } catch {
+      // ignore
+    }
+  }, [barcodeText]);
+
+  // ── Profit Simulator Calculations ─────────────────────────────────────────
   const cp = parseFloat(costPrice) || 0;
   const sp = parseFloat(sellingPrice) || 0;
   const gst = parseFloat(gstPct) || 0;
-  const profitRaw = sp - cp;
-  const profitPct = cp > 0 ? ((profitRaw / cp) * 100) : 0;
-  const spWithGst = sp * (1 + gst / 100);
-  const profitAfterGst = spWithGst - cp * (1 + gst / 100);
+  const rawProfit = sp - cp;
+  const marginPct = cp > 0 ? (rawProfit / cp) * 100 : 0;
+  const gstAmountOnSP = (sp * gst) / 100;
+  const mrpInclusive = sp + gstAmountOnSP;
+  const gstPaidOnPurchase = (cp * gst) / 100;
+  const netGstPayable = Math.max(0, gstAmountOnSP - gstPaidOnPurchase);
+  const recommendedWholesale = Math.round(cp * 1.15);
+  const recommendedRetail = Math.round(cp * 1.30);
 
   // ── Birthday helpers ───────────────────────────────────────────────────────
   const upcomingBirthdays = (employees || [])
@@ -125,6 +173,31 @@ export default function SettingsPage() {
     .sort((a, b) => a.daysLeft - b.daysLeft)
     .slice(0, 10);
 
+  // Payroll summary
+  const totalPayrollMonthly = (employees || []).reduce((acc, e) => acc + (Number(e.salary) || 0), 0);
+
+  // ── Save General Preferences ──────────────────────────────────────────────
+  const saveGeneralPreferences = async () => {
+    if (!firestore) return;
+    setSavingGeneral(true);
+    try {
+      await setDoc(doc(firestore, 'settings', 'app'), {
+        invoicePrefix,
+        defaultPrintMode,
+        defaultPaymentMode,
+      }, { merge: true });
+
+      toast({
+        title: 'Preferences Saved',
+        description: 'Invoice numbering and printing defaults updated.',
+      });
+    } catch (e: any) {
+      toast({ variant: 'destructive', title: 'Error', description: e.message });
+    } finally {
+      setSavingGeneral(false);
+    }
+  };
+
   // ── Employee CRUD ──────────────────────────────────────────────────────────
   const openAddEmp = () => {
     setEditingEmp(null);
@@ -134,9 +207,11 @@ export default function SettingsPage() {
 
   const openEditEmp = (emp: Employee) => {
     setEditingEmp(emp);
-    setEmpForm({ name: emp.name, designation: emp.designation, phone: emp.phone,
+    setEmpForm({
+      name: emp.name, designation: emp.designation, phone: emp.phone,
       email: emp.email || '', dateOfBirth: emp.dateOfBirth || '',
-      dateOfJoining: emp.dateOfJoining || '', salary: emp.salary || 0, notes: emp.notes || '' });
+      dateOfJoining: emp.dateOfJoining || '', salary: emp.salary || 0, notes: emp.notes || ''
+    });
     setEmpDialogOpen(true);
   };
 
@@ -148,7 +223,10 @@ export default function SettingsPage() {
     setEmpSaving(true);
     try {
       const id = editingEmp?.id || doc(collection(firestore, 'employees')).id;
-      await setDoc(doc(firestore, 'employees', id), { ...empForm, salary: Number(empForm.salary) || 0 });
+      await setDoc(doc(firestore, 'employees', id), {
+        ...empForm,
+        salary: Number(empForm.salary) || 0,
+      });
       toast({ title: editingEmp ? 'Employee Updated' : 'Employee Added', description: empForm.name });
       setEmpDialogOpen(false);
     } catch (e: any) {
@@ -170,7 +248,7 @@ export default function SettingsPage() {
     if (!firestore) return;
     setSavingNotif(true);
     try {
-      await setDoc(doc(firestore, 'settings', 'app'), notifSettings);
+      await setDoc(doc(firestore, 'settings', 'app'), notifSettings, { merge: true });
       toast({ title: 'Settings Saved', description: 'Notification preferences updated.' });
     } catch (e: any) {
       toast({ variant: 'destructive', title: 'Error', description: e.message });
@@ -179,13 +257,17 @@ export default function SettingsPage() {
     }
   };
 
-  // ── Barcode generate ─────────────────────────────────────────────────────
+  // ── Barcode generate ───────────────────────────────────────────────────────
   const generateBarcode = () => {
     if (!barcodeText.trim()) {
       toast({ variant: 'destructive', title: 'Enter barcode value' });
       return;
     }
-    setBarcodeSvg(generateBarcodeSVG(barcodeText.trim()));
+    try {
+      setBarcodeSvg(generateBarcodeSVG(barcodeText.trim(), { height: 60, showText: true }));
+    } catch (e: any) {
+      toast({ variant: 'destructive', title: 'Invalid Barcode Value' });
+    }
   };
 
   const downloadBarcode = () => {
@@ -199,12 +281,12 @@ export default function SettingsPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Data export ────────────────────────────────────────────────────────────
+  // ── Full Database Export ───────────────────────────────────────────────────
   const exportData = async () => {
     if (!firestore) return;
     setIsExporting(true);
     try {
-      const colNames = ['products', 'purchases', 'sales', 'expenses', 'employees'];
+      const colNames = ['products', 'purchases', 'sales', 'expenses', 'employees', 'customers', 'vendors'];
       const exportObj: Record<string, any[]> = {};
       for (const col of colNames) {
         const snap = await getDocs(collection(firestore, col));
@@ -214,10 +296,10 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `billsoft-backup-${format(new Date(), 'yyyy-MM-dd')}.json`;
+      a.download = `billingsoft-complete-backup-${format(new Date(), 'yyyy-MM-dd')}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast({ title: 'Backup Downloaded', description: 'All data exported as JSON.' });
+      toast({ title: 'Backup Downloaded', description: 'Complete database exported as JSON.' });
     } catch (e: any) {
       toast({ variant: 'destructive', title: 'Export Failed', description: e.message });
     } finally {
@@ -225,7 +307,51 @@ export default function SettingsPage() {
     }
   };
 
-  // ── Clear collection ───────────────────────────────────────────────────────
+  // ── Restore Data from Backup File ──────────────────────────────────────────
+  const handleRestoreFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !firestore) return;
+
+    setIsRestoring(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        let restoredCount = 0;
+
+        for (const [colName, records] of Object.entries(json)) {
+          if (Array.isArray(records)) {
+            const batch = writeBatch(firestore);
+            records.forEach((rec: any) => {
+              const { id, ...data } = rec;
+              if (id) {
+                batch.set(doc(firestore, colName, id), data, { merge: true });
+                restoredCount++;
+              }
+            });
+            await batch.commit();
+          }
+        }
+
+        toast({
+          title: 'Database Restored Successfully',
+          description: `Restored/Merged ${restoredCount} records across collections.`,
+        });
+      } catch (err: any) {
+        toast({
+          variant: 'destructive',
+          title: 'Restore Failed',
+          description: err.message || 'Invalid backup JSON file.',
+        });
+      } finally {
+        setIsRestoring(false);
+        if (restoreInputRef.current) restoreInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // ── Clear Collection ───────────────────────────────────────────────────────
   const clearCollection = async () => {
     if (!firestore || !clearTarget) return;
     setIsClearing(true);
@@ -245,137 +371,285 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" description="Manage application preferences, data, and tools." />
+      <PageHeader
+        title="Settings & System Configurations"
+        description="Configure billing defaults, pricing simulators, team payroll, data backups, and hardware tools."
+      />
 
-      <Tabs defaultValue="general" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 lg:grid-cols-6 h-auto gap-1 p-1 bg-muted/60 rounded-xl">
+      <Tabs defaultValue="general" className="space-y-3">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 h-auto gap-1 p-1 bg-muted/60 rounded-xl">
           {[
-            { value: 'general', icon: Settings2, label: 'General' },
-            { value: 'data', icon: Database, label: 'Data' },
-            { value: 'barcode', icon: Barcode, label: 'Barcode' },
-            { value: 'profit', icon: Calculator, label: 'Profit Calc' },
-            { value: 'employees', icon: Users, label: 'Employees' },
-            { value: 'notifications', icon: Bell, label: 'Alerts' },
+            { value: 'profile', icon: Building2, label: 'Business Profile' },
+            { value: 'general', icon: Settings2, label: 'Billing Defaults' },
+            { value: 'data', icon: Database, label: 'Data & Backup' },
+            { value: 'profit', icon: Calculator, label: 'Price Simulator' },
+            { value: 'barcode', icon: Barcode, label: 'Barcode Tools' },
+            { value: 'employees', icon: Users, label: 'Team & Payroll' },
+            { value: 'notifications', icon: Bell, label: 'Alerts & Rules' },
           ].map(({ value, icon: Icon, label }) => (
             <TabsTrigger
               key={value}
               value={value}
-              className="flex items-center gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm rounded-lg text-xs font-medium py-2"
+              className="flex items-center gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-xs rounded-lg text-xs font-medium py-1.5"
             >
-              <Icon className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{label}</span>
+              <Icon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{label}</span>
             </TabsTrigger>
           ))}
         </TabsList>
 
-        {/* ── GENERAL ─────────────────────────────────────────────────────── */}
-        <TabsContent value="general">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card className="border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-blue-500/10">
-                    <Settings2 className="h-4 w-4 text-blue-500" />
+        {/* ── 1. BUSINESS PROFILE & BANK ──────────────────────────────────── */}
+        <TabsContent value="profile">
+          <BusinessProfileSettings />
+        </TabsContent>
+
+        {/* ── 2. GENERAL & BILLING DEFAULTS (AWESOME REVAMP) ─────────────── */}
+        <TabsContent value="general" className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            {/* Invoice Configuration Card */}
+            <Card className="border-primary/20 shadow-xs">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-primary/10 text-primary">
+                    <Receipt className="h-4 w-4" />
                   </div>
-                  Application Info
+                  Invoice Series &amp; Print Hardware Defaults
                 </CardTitle>
-                <CardDescription>About this application</CardDescription>
+                <CardDescription className="text-xs">
+                  Automate invoice numbering sequence and default printer paper output.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                {[
-                  { label: 'App Name', value: 'WinTech-Spark BillingSoft' },
-                  { label: 'Version', value: '2.0.0' },
-                  { label: 'Platform', value: 'Next.js PWA + Firebase' },
-                  { label: 'Theme', value: 'Electric Crimson (#F62440)' },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
-                    <span className="text-sm text-muted-foreground">{label}</span>
-                    <span className="text-sm font-medium">{value}</span>
+              <CardContent className="p-4 space-y-3 text-xs">
+                <div className="space-y-1">
+                  <Label className="text-xs">Invoice Prefix Code</Label>
+                  <Input
+                    value={invoicePrefix}
+                    onChange={(e) => setInvoicePrefix(e.target.value.toUpperCase())}
+                    placeholder="e.g. INV- or WT-"
+                    className="h-8 font-mono uppercase"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Example generated invoice: <strong className="font-mono text-foreground">{invoicePrefix}006-2026</strong>
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs">Default Receipt Paper Format</Label>
+                  <div className="grid grid-cols-3 gap-2 pt-1">
+                    {[
+                      { id: 'thermal-80', label: '80mm Thermal', sub: 'Standard Roll' },
+                      { id: 'thermal-58', label: '58mm Thermal', sub: 'Compact Roll' },
+                      { id: 'a4', label: 'A4 Laser', sub: 'Full Sheet' },
+                    ].map((mode) => (
+                      <div
+                        key={mode.id}
+                        onClick={() => setDefaultPrintMode(mode.id as any)}
+                        className={`cursor-pointer border rounded-lg p-2 text-center transition-all ${
+                          defaultPrintMode === mode.id
+                            ? 'border-primary bg-primary/10 text-primary font-semibold'
+                            : 'border-border hover:bg-muted/40 text-muted-foreground'
+                        }`}
+                      >
+                        <Printer className="h-4 w-4 mx-auto mb-1 opacity-70" />
+                        <div className="text-[11px]">{mode.label}</div>
+                        <div className="text-[10px] opacity-70">{mode.sub}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs">Default Payment Mode on Invoice Creation</Label>
+                  <div className="flex gap-2">
+                    {['Cash', 'UPI', 'Bank Transfer'].map((m) => (
+                      <Button
+                        key={m}
+                        type="button"
+                        size="sm"
+                        variant={defaultPaymentMode === m ? 'default' : 'outline'}
+                        className="h-7 text-xs flex-1"
+                        onClick={() => setDefaultPaymentMode(m)}
+                      >
+                        {m}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <Button
+                  onClick={saveGeneralPreferences}
+                  disabled={savingGeneral}
+                  className="w-full gap-2 mt-2 h-8 text-xs bg-primary"
+                >
+                  {savingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  Save Billing Defaults
+                </Button>
               </CardContent>
             </Card>
 
-            <Card className="border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-emerald-500/10">
-                    <RefreshCw className="h-4 w-4 text-emerald-500" />
+            {/* System Status & Cache Maintenance */}
+            <Card className="border-border shadow-xs">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-indigo-500/10 text-indigo-500">
+                    <Settings2 className="h-4 w-4" />
                   </div>
-                  Quick Actions
+                  System Environment &amp; Cache Maintenance
                 </CardTitle>
-                <CardDescription>Common utility actions</CardDescription>
+                <CardDescription className="text-xs">
+                  Active Progressive Web App runtime details and cloud cache tools.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2">
-                <Button variant="outline" className="w-full justify-start gap-2 border-emerald-500/30 hover:bg-emerald-500/10" onClick={() => window.location.reload()}>
-                  <RefreshCw className="h-4 w-4 text-emerald-500" /> Refresh Application
-                </Button>
-                <Button variant="outline" className="w-full justify-start gap-2 border-blue-500/30 hover:bg-blue-500/10" onClick={() => { localStorage.clear(); toast({ title: 'Local cache cleared.' }); }}>
-                  <X className="h-4 w-4 text-blue-500" /> Clear Local Cache
-                </Button>
+              <CardContent className="p-4 space-y-3">
+                <div className="divide-y text-xs">
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Software Core</span>
+                    <span className="font-medium">WinTech-Spark Suite v2.0 (PWA)</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Database Engine</span>
+                    <span className="font-medium flex items-center gap-1 text-emerald-600">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      Google Cloud Firestore (Live Online)
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Offline Storage</span>
+                    <span className="font-medium">IndexedDB Local Cache Enabled</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Regional Currency</span>
+                    <span className="font-mono font-medium">INR (₹) Indian Rupee</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex flex-col gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-start gap-2 text-xs"
+                    onClick={() => window.location.reload()}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-primary" /> Reload &amp; Refresh Workspace
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-start gap-2 text-xs text-amber-600 hover:bg-amber-500/10 border-amber-500/30"
+                    onClick={() => {
+                      localStorage.clear();
+                      toast({ title: 'Local Cache Cleared', description: 'Application state refreshed.' });
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Purge Local Browser Cache
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </div>
         </TabsContent>
 
-        {/* ── DATA MANAGEMENT ──────────────────────────────────────────────── */}
-        <TabsContent value="data">
-          <div className="grid gap-4 md:grid-cols-2">
-            {/* Backup */}
-            <Card className="border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-emerald-500/10">
-                    <Download className="h-4 w-4 text-emerald-500" />
+        {/* ── 3. DATA & BACKUP (AWESOME LIVE METRICS & RESTORE) ──────────── */}
+        <TabsContent value="data" className="space-y-3">
+          {/* Live Records Matrix */}
+          <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+            {[
+              { label: 'Products', count: (products || []).length, color: 'text-indigo-600' },
+              { label: 'Sales Invoices', count: (sales || []).length, color: 'text-emerald-600' },
+              { label: 'Purchases', count: (purchases || []).length, color: 'text-cyan-600' },
+              { label: 'Expenses', count: (expenses || []).length, color: 'text-amber-600' },
+              { label: 'Customers', count: (customers || []).length, color: 'text-rose-600' },
+              { label: 'Suppliers', count: (vendors || []).length, color: 'text-purple-600' },
+            ].map((col) => (
+              <div key={col.label} className="bg-muted/40 p-2.5 rounded-lg border text-center">
+                <span className="text-[11px] text-muted-foreground">{col.label}</span>
+                <div className={`text-lg font-bold ${col.color}`}>{col.count}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {/* Backup & Restore */}
+            <Card className="border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 via-card to-card">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-emerald-500/10 text-emerald-500">
+                    <Download className="h-4 w-4" />
                   </div>
-                  Backup Data
+                  Full Database Backup &amp; Restore
                 </CardTitle>
-                <CardDescription>
-                  Export all your data (products, sales, purchases, expenses, employees) as a JSON file.
+                <CardDescription className="text-xs">
+                  Export complete store database or restore from a previously downloaded JSON backup file.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <Button onClick={exportData} disabled={isExporting} className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white">
+              <CardContent className="p-4 space-y-3">
+                <Button
+                  onClick={exportData}
+                  disabled={isExporting}
+                  className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9"
+                >
                   {isExporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                  {isExporting ? 'Exporting...' : 'Download Backup (JSON)'}
+                  {isExporting ? 'Exporting...' : 'Download Full JSON Backup'}
                 </Button>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Backup includes: Products, Sales, Purchases, Expenses, Employees
-                </p>
+
+                <div className="border-t pt-3">
+                  <Label className="text-xs block mb-1">Restore Database from Backup File</Label>
+                  <input
+                    ref={restoreInputRef}
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleRestoreFile}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isRestoring}
+                    onClick={() => restoreInputRef.current?.click()}
+                    className="w-full gap-2 border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs h-9"
+                  >
+                    {isRestoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {isRestoring ? 'Restoring records...' : 'Select Backup JSON to Restore'}
+                  </Button>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Safely merges records without duplicating existing IDs.
+                  </p>
+                </div>
               </CardContent>
             </Card>
 
-            {/* Clear Data */}
-            <Card className="border-destructive/20 bg-gradient-to-br from-destructive/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-destructive/10">
-                    <Trash2 className="h-4 w-4 text-destructive" />
+            {/* Clear Collections */}
+            <Card className="border-destructive/20 bg-gradient-to-br from-destructive/5 via-card to-card">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-destructive/10 text-destructive">
+                    <ShieldAlert className="h-4 w-4" />
                   </div>
-                  Clear Data
+                  Selective Collection Purge (Dangerous)
                 </CardTitle>
-                <CardDescription>
-                  Permanently delete records from a specific collection. This cannot be undone.
+                <CardDescription className="text-xs">
+                  Permanently reset testing data before going live. Protected by double confirmation.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="p-4 space-y-2">
                 {[
-                  { label: 'Sales / Invoices', col: 'sales', color: 'text-orange-500 border-orange-500/30 hover:bg-orange-500/10' },
-                  { label: 'Purchases', col: 'purchases', color: 'text-amber-500 border-amber-500/30 hover:bg-amber-500/10' },
-                  { label: 'Expenses', col: 'expenses', color: 'text-purple-500 border-purple-500/30 hover:bg-purple-500/10' },
-                  { label: 'Products & Inventory', col: 'products', color: 'text-red-600 border-red-500/30 hover:bg-red-500/10' },
+                  { label: 'Sales Invoices', col: 'sales', color: 'text-orange-500 border-orange-500/30 hover:bg-orange-500/10' },
+                  { label: 'Purchases Bills', col: 'purchases', color: 'text-amber-500 border-amber-500/30 hover:bg-amber-500/10' },
+                  { label: 'Expenses Records', col: 'expenses', color: 'text-purple-500 border-purple-500/30 hover:bg-purple-500/10' },
+                  { label: 'Products Catalog', col: 'products', color: 'text-red-600 border-red-500/30 hover:bg-red-500/10' },
                 ].map(({ label, col, color }) => (
                   <Button
                     key={col}
                     variant="outline"
-                    className={`w-full justify-between gap-2 ${color}`}
+                    size="sm"
+                    className={`w-full justify-between gap-2 text-xs h-8 ${color}`}
                     onClick={() => setClearTarget(col)}
                   >
-                    <span className="flex items-center gap-2">
-                      <ShieldAlert className="h-4 w-4" />
+                    <span className="flex items-center gap-1.5">
+                      <Trash2 className="h-3.5 w-3.5" />
                       {label}
                     </span>
-                    <Badge variant="outline" className="text-[10px] border-current">Clear</Badge>
+                    <Badge variant="outline" className="text-[10px] h-4 font-normal border-current">Purge</Badge>
                   </Button>
                 ))}
               </CardContent>
@@ -383,110 +657,77 @@ export default function SettingsPage() {
           </div>
         </TabsContent>
 
-        {/* ── BARCODE GENERATOR ────────────────────────────────────────────── */}
-        <TabsContent value="barcode">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card className="border-indigo-500/20 bg-gradient-to-br from-indigo-500/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-indigo-500/10">
-                    <Barcode className="h-4 w-4 text-indigo-500" />
+        {/* ── 4. PROFIT & PRICING STRATEGY SIMULATOR (AWESOME UPGRADE) ───── */}
+        <TabsContent value="profit" className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-12">
+            {/* Input Form */}
+            <Card className="md:col-span-6 border-amber-500/20 shadow-xs">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-amber-500/10 text-amber-500">
+                    <Calculator className="h-4 w-4" />
                   </div>
-                  Barcode Generator
+                  Product Pricing &amp; Margin Simulator
                 </CardTitle>
-                <CardDescription>Generate barcodes for your products. Download as SVG.</CardDescription>
+                <CardDescription className="text-xs">
+                  Model retail markups, wholesale rates, and input tax credit (ITC) offsets.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1">
-                  <Label>Product Name (optional label)</Label>
-                  <Input
-                    placeholder="e.g. TVS Tyre 90/90-10"
-                    value={barcodeProductName}
-                    onChange={(e) => setBarcodeProductName(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>Barcode Value / SKU *</Label>
-                  <Input
-                    placeholder="e.g. PROD-001 or 8901234567890"
-                    value={barcodeText}
-                    onChange={(e) => setBarcodeText(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && generateBarcode()}
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <Button onClick={generateBarcode} className="flex-1 gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
-                    <Barcode className="h-4 w-4" /> Generate
-                  </Button>
-                  {barcodeSvg && (
-                    <Button variant="outline" onClick={downloadBarcode} className="gap-2 border-indigo-500/30">
-                      <Download className="h-4 w-4 text-indigo-500" /> Download
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Barcode Preview */}
-            <Card className="border-border/50 flex flex-col items-center justify-center min-h-[260px]">
-              <CardHeader className="w-full">
-                <CardTitle className="text-base text-muted-foreground">Preview</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-col items-center gap-2 w-full">
-                {barcodeSvg ? (
-                  <>
-                    {barcodeProductName && (
-                      <p className="text-sm font-semibold text-center">{barcodeProductName}</p>
-                    )}
-                    <div
-                      className="border rounded-lg p-3 bg-white shadow-sm w-full overflow-auto"
-                      dangerouslySetInnerHTML={{ __html: barcodeSvg }}
-                    />
-                  </>
-                ) : (
-                  <div className="flex flex-col items-center gap-2 text-muted-foreground py-8">
-                    <Barcode className="h-12 w-12 opacity-20" />
-                    <p className="text-sm">Barcode preview will appear here</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        {/* ── PROFIT CALCULATOR ────────────────────────────────────────────── */}
-        <TabsContent value="profit">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card className="border-amber-500/20 bg-gradient-to-br from-amber-500/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-amber-500/10">
-                    <Calculator className="h-4 w-4 text-amber-500" />
-                  </div>
-                  Profit Calculator
-                </CardTitle>
-                <CardDescription>Calculate profit margin and GST-inclusive pricing.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="p-4 space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label>Cost Price (₹)</Label>
-                    <Input type="number" placeholder="0" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} />
+                    <Label className="text-xs">Buying Cost Price (₹) *</Label>
+                    <Input
+                      type="number"
+                      placeholder="e.g. 450"
+                      value={costPrice}
+                      onChange={(e) => setCostPrice(e.target.value)}
+                      className="h-8 text-xs font-semibold"
+                    />
                   </div>
                   <div className="space-y-1">
-                    <Label>Selling Price (₹)</Label>
-                    <Input type="number" placeholder="0" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} />
+                    <Label className="text-xs">Target Selling Price (₹) *</Label>
+                    <Input
+                      type="number"
+                      placeholder="e.g. 650"
+                      value={sellingPrice}
+                      onChange={(e) => setSellingPrice(e.target.value)}
+                      className="h-8 text-xs font-semibold"
+                    />
                   </div>
                 </div>
+
+                {/* Quick Markup Presets */}
                 <div className="space-y-1">
-                  <Label>GST Rate (%)</Label>
+                  <Label className="text-xs">Quick Target Margin Presets</Label>
+                  <div className="flex gap-1.5">
+                    {[15, 20, 25, 30, 40, 50].map((m) => (
+                      <Button
+                        key={m}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[11px] flex-1"
+                        onClick={() => {
+                          const base = parseFloat(costPrice) || 0;
+                          setSellingPrice(String(Math.round(base * (1 + m / 100))));
+                        }}
+                      >
+                        +{m}%
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs">Applicable GST Slab (%)</Label>
                   <div className="flex gap-2">
                     {[0, 5, 12, 18, 28].map((v) => (
                       <Button
                         key={v}
                         size="sm"
                         variant={gstPct === String(v) ? 'default' : 'outline'}
-                        className={gstPct === String(v) ? 'bg-primary text-white' : ''}
+                        className={`h-7 text-xs flex-1 ${gstPct === String(v) ? 'bg-primary text-white font-semibold' : ''}`}
                         onClick={() => setGstPct(String(v))}
                       >
                         {v}%
@@ -497,240 +738,405 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
 
-            {/* Results */}
-            <Card className={`border-2 ${profitRaw >= 0 ? 'border-emerald-500/30 bg-gradient-to-br from-emerald-500/5 to-card' : 'border-red-500/30 bg-gradient-to-br from-red-500/5 to-card'}`}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  {profitRaw >= 0
-                    ? <TrendingUp className="h-5 w-5 text-emerald-500" />
-                    : <TrendingDown className="h-5 w-5 text-red-500" />}
-                  Results
+            {/* Strategy Output Breakdown */}
+            <Card className="md:col-span-6 border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 via-card to-card shadow-xs">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1 rounded-md bg-emerald-500/10 text-emerald-500">
+                      <TrendingUp className="h-4 w-4" />
+                    </div>
+                    <span>Pricing Recommendations</span>
+                  </div>
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-xs font-bold">
+                    {marginPct.toFixed(1)}% Markup
+                  </Badge>
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3">
-                {[
-                  { label: 'Profit / Loss (before GST)', value: `₹${profitRaw.toFixed(2)}`, color: profitRaw >= 0 ? 'text-emerald-600' : 'text-red-600' },
-                  { label: 'Profit Margin %', value: `${profitPct.toFixed(2)}%`, color: profitPct >= 0 ? 'text-emerald-600' : 'text-red-600' },
-                  { label: `Selling Price (incl. ${gst}% GST)`, value: `₹${spWithGst.toFixed(2)}`, color: 'text-blue-600' },
-                  { label: 'Net Profit (after GST)', value: `₹${profitAfterGst.toFixed(2)}`, color: profitAfterGst >= 0 ? 'text-emerald-600 font-bold text-lg' : 'text-red-600 font-bold text-lg' },
-                ].map(({ label, value, color }) => (
-                  <div key={label} className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
-                    <span className="text-sm text-muted-foreground">{label}</span>
-                    <span className={`text-sm font-semibold ${color}`}>{value}</span>
+              <CardContent className="p-4 space-y-2.5 text-xs">
+                <div className="divide-y">
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Pre-Tax Gross Margin (Profit/Unit)</span>
+                    <span className="font-bold text-emerald-600 text-sm">₹{rawProfit.toFixed(2)}</span>
                   </div>
-                ))}
-                {cp === 0 && sp === 0 && (
-                  <p className="text-xs text-center text-muted-foreground pt-2">Enter cost and selling price to calculate</p>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Recommended Wholesale (15% Markup)</span>
+                    <span className="font-semibold">₹{recommendedWholesale.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Recommended Retail (30% Markup)</span>
+                    <span className="font-semibold">₹{recommendedRetail.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Final Bill MRP (incl. {gst}% GST)</span>
+                    <span className="font-bold text-sm text-foreground">₹{mrpInclusive.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Input Tax Credit (ITC Offset Claimable)</span>
+                    <span className="text-cyan-600 font-medium">₹{gstPaidOnPurchase.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-muted-foreground">Net GST Payable to Govt</span>
+                    <span className="text-muted-foreground">₹{netGstPayable.toFixed(2)}</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* ── 5. BARCODE TOOLS & DIRECT LINK ─────────────────────────────── */}
+        <TabsContent value="barcode" className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-12">
+            {/* Quick SVG Barcode */}
+            <Card className="md:col-span-7 border-indigo-500/20 shadow-xs">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-indigo-500/10 text-indigo-500">
+                    <Barcode className="h-4 w-4" />
+                  </div>
+                  Quick Single Barcode Generator
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Generate instant Code 128 vector barcodes for product labels or packaging.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-4 space-y-3 text-xs">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Product Label Title</Label>
+                    <Input
+                      placeholder="e.g. Brake Shoe TVS"
+                      value={barcodeProductName}
+                      onChange={(e) => setBarcodeProductName(e.target.value)}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Barcode SKU / Code *</Label>
+                    <Input
+                      placeholder="e.g. 8901234567890"
+                      value={barcodeText}
+                      onChange={(e) => setBarcodeText(e.target.value)}
+                      className="h-8 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button onClick={generateBarcode} className="h-8 text-xs flex-1 gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white">
+                    <Barcode className="h-3.5 w-3.5" /> Generate Barcode
+                  </Button>
+                  {barcodeSvg && (
+                    <Button variant="outline" onClick={downloadBarcode} className="h-8 text-xs gap-1.5 border-indigo-500/30">
+                      <Download className="h-3.5 w-3.5" /> Download SVG
+                    </Button>
+                  )}
+                </div>
+
+                {barcodeSvg && (
+                  <div className="border rounded-lg p-3 bg-white shadow-2xs flex flex-col items-center">
+                    {barcodeProductName && (
+                      <div className="text-xs font-bold text-gray-800 mb-1">{barcodeProductName}</div>
+                    )}
+                    <div dangerouslySetInnerHTML={{ __html: barcodeSvg }} />
+                  </div>
                 )}
               </CardContent>
             </Card>
-          </div>
-        </TabsContent>
 
-        {/* ── EMPLOYEES ────────────────────────────────────────────────────── */}
-        <TabsContent value="employees">
-          <div className="space-y-4">
-            {/* Birthday Banner */}
-            {upcomingBirthdays.length > 0 && (
-              <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                {upcomingBirthdays.slice(0, 3).map(({ emp, daysLeft }) => (
-                  <Card key={emp.id} className={`border-pink-500/30 bg-gradient-to-br from-pink-500/10 to-card flex items-center gap-3 p-4 ${daysLeft === 0 ? 'ring-2 ring-pink-500' : ''}`}>
-                    <div className="p-2 rounded-full bg-pink-500/20 text-pink-500">
-                      {daysLeft === 0 ? <PartyPopper className="h-5 w-5" /> : <Gift className="h-5 w-5" />}
-                    </div>
-                    <div>
-                      <p className="font-semibold text-sm">{emp.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {daysLeft === 0 ? '🎉 Birthday Today!' : `Birthday in ${daysLeft} day${daysLeft > 1 ? 's' : ''}`}
-                      </p>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            )}
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <div className="p-1.5 rounded-lg bg-primary/10">
-                      <Users className="h-4 w-4 text-primary" />
-                    </div>
-                    Employee Database
-                  </CardTitle>
-                  <CardDescription>Manage your team members and their details.</CardDescription>
-                </div>
-                <Button size="sm" className="gap-1" onClick={openAddEmp}>
-                  <Plus className="h-3.5 w-3.5" /> Add Employee
-                </Button>
+            {/* Link to Dedicated Label Printer */}
+            <Card className="md:col-span-5 border-primary/20 bg-gradient-to-br from-primary/5 via-card to-card flex flex-col justify-between shadow-xs">
+              <CardHeader className="p-4 pb-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Printer className="h-4 w-4 text-primary" />
+                  Thermal Roll &amp; Sticker Sheets
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Need to print multiple label rolls or 24/40/65 sticker sheets with store branding and GST?
+                </CardDescription>
               </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Designation</TableHead>
-                      <TableHead>Phone</TableHead>
-                      <TableHead>DOB</TableHead>
-                      <TableHead className="text-right">Salary</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {empLoading && (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                          <Loader2 className="h-5 w-5 animate-spin mx-auto" />
-                        </TableCell>
-                      </TableRow>
-                    )}
-                    {!empLoading && (employees || []).length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                          No employees added yet.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                    {!empLoading && (employees || []).map((emp) => (
-                      <TableRow key={emp.id}>
-                        <TableCell className="font-medium">{emp.name}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">{emp.designation}</Badge>
-                        </TableCell>
-                        <TableCell>{emp.phone}</TableCell>
-                        <TableCell>{emp.dateOfBirth ? format(parseISO(emp.dateOfBirth), 'dd-MMM') : '—'}</TableCell>
-                        <TableCell className="text-right">{emp.salary ? `₹${emp.salary.toLocaleString()}` : '—'}</TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-1">
-                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEditEmp(emp)}>
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => setDeleteEmpId(emp.id)}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <CardContent className="p-4 space-y-3 text-xs">
+                <div className="space-y-1.5 text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                    <span>Supports 50x25mm, 50x38mm, 38x25mm rolls</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                    <span>Supports A4 sticker sheets (24, 40, 65 labels)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                    <span>Pick items directly from product inventory</span>
+                  </div>
+                </div>
+
+                <Button className="w-full gap-2 text-xs h-9 bg-primary" asChild>
+                  <Link href="/barcodes">
+                    <span>Open Label Generator</span>
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
           </div>
         </TabsContent>
 
-        {/* ── NOTIFICATIONS & ALERTS ───────────────────────────────────────── */}
-        <TabsContent value="notifications">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card className="border-violet-500/20 bg-gradient-to-br from-violet-500/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-violet-500/10">
-                    <Bell className="h-4 w-4 text-violet-500" />
-                  </div>
-                  Notification Preferences
+        {/* ── 6. EMPLOYEES & PAYROLL (AWESOME METRICS & WHATSAPP) ─────────── */}
+        <TabsContent value="employees" className="space-y-3">
+          {/* Payroll & Staff Summary */}
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="bg-muted/40 p-2.5 rounded-lg border text-center">
+              <span className="text-[11px] text-muted-foreground">Active Team Members</span>
+              <div className="text-base font-bold">{(employees || []).length} staff</div>
+            </div>
+            <div className="bg-indigo-500/10 border border-indigo-500/20 p-2.5 rounded-lg text-center">
+              <span className="text-[11px] text-indigo-700 dark:text-indigo-400">Monthly Payroll Run-rate</span>
+              <div className="text-base font-bold text-indigo-600">₹{totalPayrollMonthly.toLocaleString()}</div>
+            </div>
+            <div className="bg-pink-500/10 border border-pink-500/20 p-2.5 rounded-lg text-center">
+              <span className="text-[11px] text-pink-700 dark:text-pink-400">Upcoming Birthdays</span>
+              <div className="text-base font-bold text-pink-600">{upcomingBirthdays.length} this month/year</div>
+            </div>
+          </div>
+
+          <Card>
+            <CardHeader className="p-3 pb-2 border-b flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
+                  <Users className="h-4 w-4 text-primary" />
+                  Team Roster &amp; Salaries
                 </CardTitle>
-                <CardDescription>Control which alerts you receive inside the app.</CardDescription>
+                <CardDescription className="text-xs">
+                  Manage staff members, roles, contact numbers, and payroll commitments.
+                </CardDescription>
+              </div>
+              <Button size="sm" className="h-7 text-xs gap-1" onClick={openAddEmp}>
+                <Plus className="h-3.5 w-3.5" /> Add Staff
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Staff Name</TableHead>
+                    <TableHead className="w-[120px]">Designation</TableHead>
+                    <TableHead className="w-[120px]">Phone</TableHead>
+                    <TableHead className="w-[100px]">Birthday</TableHead>
+                    <TableHead className="w-[120px] text-right font-semibold">Monthly Salary</TableHead>
+                    <TableHead className="w-[80px] text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {empLoading && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-6 text-muted-foreground text-xs">
+                        <Loader2 className="h-4 w-4 animate-spin inline-block mr-2" />
+                        Loading employee roster...
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!empLoading && (employees || []).map((emp) => (
+                    <TableRow key={emp.id}>
+                      <TableCell className="font-semibold text-xs">{emp.name}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-[10px] h-4 font-normal bg-primary/10 text-primary border-primary/20">
+                          {emp.designation}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground font-mono">
+                        {emp.phone || '—'}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {emp.dateOfBirth ? format(parseISO(emp.dateOfBirth), 'dd-MMM') : '—'}
+                      </TableCell>
+                      <TableCell className="text-right text-xs font-semibold">
+                        ₹{(emp.salary || 0).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          {emp.phone && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-emerald-600 hover:bg-emerald-500/10"
+                              title="Chat on WhatsApp"
+                              asChild
+                            >
+                              <a
+                                href={`https://wa.me/91${emp.phone.replace(/\D/g, '')}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <MessageCircle className="h-3.5 w-3.5" />
+                              </a>
+                            </Button>
+                          )}
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEditEmp(emp)}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                            onClick={() => setDeleteEmpId(emp.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {!empLoading && (employees || []).length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-6 text-xs text-muted-foreground">
+                        No team members added yet. Click &quot;Add Staff&quot; above.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── 7. ALERTS & NOTIFICATIONS (AWESOME PREFERENCES) ─────────────── */}
+        <TabsContent value="notifications" className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <Card className="border-violet-500/20 bg-gradient-to-br from-violet-500/5 via-card to-card shadow-xs">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-violet-500/10 text-violet-500">
+                    <Bell className="h-4 w-4" />
+                  </div>
+                  System Alert Thresholds &amp; Reminders
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Automate in-app alerts and notifications across your team.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-5">
+              <CardContent className="p-4 space-y-3 text-xs">
                 {[
                   {
                     key: 'lowStockAlerts',
-                    icon: <Package className="h-4 w-4 text-amber-500" />,
-                    label: 'Low Stock Alerts',
-                    desc: 'Notify when product stock falls below threshold',
-                    color: 'bg-amber-500/10',
+                    label: 'Low Stock Auto-Notifications',
+                    desc: 'Notify when products fall below safe threshold',
                   },
                   {
                     key: 'overdueInvoiceAlerts',
-                    icon: <AlertCircle className="h-4 w-4 text-red-500" />,
-                    label: 'Overdue Invoice Alerts',
-                    desc: 'Notify when pending invoices are overdue',
-                    color: 'bg-red-500/10',
+                    label: 'Overdue Customer Invoice Alerts',
+                    desc: 'Highlight unpaid customer bills past due date',
                   },
                   {
                     key: 'birthdayReminders',
-                    icon: <Gift className="h-4 w-4 text-pink-500" />,
-                    label: 'Birthday Reminders',
-                    desc: 'Remind about employee birthdays',
-                    color: 'bg-pink-500/10',
+                    label: 'Team Birthday Greetings Reminder',
+                    desc: 'Alert when team member birthday arrives',
                   },
-                ].map(({ key, icon, label, desc, color }) => (
-                  <div key={key} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-border/50 bg-background/50">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${color}`}>{icon}</div>
-                      <div>
-                        <p className="text-sm font-medium">{label}</p>
-                        <p className="text-xs text-muted-foreground">{desc}</p>
-                      </div>
+                ].map(({ key, label, desc }) => (
+                  <div key={key} className="flex items-center justify-between p-2.5 rounded-lg border bg-background/50">
+                    <div>
+                      <p className="font-semibold">{label}</p>
+                      <p className="text-[11px] text-muted-foreground">{desc}</p>
                     </div>
                     <Switch
-                      checked={notifSettings[key as keyof typeof notifSettings] as boolean}
-                      onCheckedChange={(v) => setNotifSettings((prev) => ({ ...prev, [key]: v }))}
+                      checked={Boolean(notifSettings[key as keyof typeof notifSettings])}
+                      onCheckedChange={(v) => setNotifSettings((p) => ({ ...p, [key]: v }))}
                     />
                   </div>
                 ))}
 
-                <div className="space-y-2 pt-2">
-                  <Label className="flex items-center gap-2 text-sm">
-                    <Package className="h-3.5 w-3.5 text-amber-500" />
-                    Low Stock Threshold (units)
-                  </Label>
+                <div className="space-y-1 pt-1">
+                  <Label className="text-xs">Low Stock Threshold (units)</Label>
                   <Input
                     type="number"
                     min="1"
                     value={notifSettings.lowStockThreshold}
                     onChange={(e) => setNotifSettings((p) => ({ ...p, lowStockThreshold: Number(e.target.value) }))}
-                    className="w-32"
+                    className="h-8 w-28 text-xs"
                   />
-                  <p className="text-xs text-muted-foreground">Alert when stock drops below this quantity</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Products with inventory at or below this value show amber/red warnings.
+                  </p>
                 </div>
 
-                <Button onClick={saveNotifSettings} disabled={savingNotif} className="w-full gap-2">
-                  {savingNotif ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  Save Notification Settings
+                <Button onClick={saveNotifSettings} disabled={savingNotif} className="w-full gap-2 h-8 text-xs bg-primary">
+                  {savingNotif ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  Save Alert Settings
                 </Button>
               </CardContent>
             </Card>
 
-            {/* Upcoming Birthdays Sidebar */}
-            <Card className="border-pink-500/20 bg-gradient-to-br from-pink-500/5 to-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <div className="p-1.5 rounded-lg bg-pink-500/10">
-                    <Gift className="h-4 w-4 text-pink-500" />
+            {/* Birthday Calendar Preview */}
+            <Card className="border-pink-500/20 bg-gradient-to-br from-pink-500/5 via-card to-card shadow-xs">
+              <CardHeader className="p-4 pb-2 border-b">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-pink-500/10 text-pink-500">
+                    <Gift className="h-4 w-4" />
                   </div>
-                  Upcoming Birthdays
+                  Upcoming Celebrations &amp; Birthdays
                 </CardTitle>
-                <CardDescription>Next 10 employee birthdays</CardDescription>
+                <CardDescription className="text-xs">
+                  Next scheduled staff birthdays in your organization.
+                </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-4">
                 {upcomingBirthdays.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Gift className="h-10 w-10 mx-auto opacity-20 mb-2" />
-                    <p className="text-sm">No birthdays on record. Add employee DOBs in the Employees tab.</p>
+                  <div className="text-center py-6 text-muted-foreground text-xs">
+                    <Gift className="h-8 w-8 mx-auto opacity-30 mb-1" />
+                    No birthdays on record. Add employee birth dates in the Team tab.
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     {upcomingBirthdays.map(({ emp, daysLeft, nextBirthday }) => (
-                      <div key={emp.id} className={`flex items-center justify-between p-2.5 rounded-lg border ${daysLeft === 0 ? 'border-pink-500/50 bg-pink-500/10' : daysLeft <= 7 ? 'border-amber-500/30 bg-amber-500/5' : 'border-border/50 bg-background/50'}`}>
+                      <div
+                        key={emp.id}
+                        className={`flex items-center justify-between p-2 rounded-lg border text-xs ${
+                          daysLeft === 0
+                            ? 'border-pink-500 bg-pink-500/10 font-semibold'
+                            : 'border-border/60 bg-background/50'
+                        }`}
+                      >
                         <div className="flex items-center gap-2">
-                          <div className={`p-1.5 rounded-full ${daysLeft === 0 ? 'bg-pink-500/20' : 'bg-muted'}`}>
-                            {daysLeft === 0 ? <PartyPopper className="h-3.5 w-3.5 text-pink-500" /> : <Gift className="h-3.5 w-3.5 text-muted-foreground" />}
-                          </div>
+                          {daysLeft === 0 ? (
+                            <PartyPopper className="h-4 w-4 text-pink-500" />
+                          ) : (
+                            <Gift className="h-3.5 w-3.5 text-muted-foreground" />
+                          )}
                           <div>
-                            <p className="text-sm font-medium">{emp.name}</p>
-                            <p className="text-xs text-muted-foreground">{emp.designation}</p>
+                            <span className="font-medium text-foreground">{emp.name}</span>
+                            <span className="text-[10px] text-muted-foreground ml-1.5">({emp.designation})</span>
                           </div>
                         </div>
-                        <div className="text-right">
+
+                        <div className="flex items-center gap-2">
                           <Badge
                             variant="outline"
-                            className={`text-[10px] ${daysLeft === 0 ? 'bg-pink-500 text-white border-pink-500' : daysLeft <= 7 ? 'bg-amber-500/20 text-amber-600 border-amber-500/30' : ''}`}
+                            className={`text-[10px] ${
+                              daysLeft === 0
+                                ? 'bg-pink-500 text-white border-pink-500'
+                                : 'bg-muted text-muted-foreground'
+                            }`}
                           >
-                            {daysLeft === 0 ? '🎉 Today!' : `${daysLeft}d`}
+                            {daysLeft === 0 ? 'Today!' : `in ${daysLeft} days`}
                           </Badge>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">{format(nextBirthday, 'dd MMM')}</p>
+                          {emp.phone && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 px-1.5 text-emerald-600"
+                              title="Send WhatsApp Wish"
+                              asChild
+                            >
+                              <a
+                                href={`https://wa.me/91${emp.phone.replace(/\D/g, '')}?text=Happy%20Birthday%20${encodeURIComponent(emp.name)}!%20Wishing%20you%20a%20wonderful%20year%20ahead!`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <MessageCircle className="h-3 w-3" />
+                              </a>
+                            </Button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -742,72 +1148,94 @@ export default function SettingsPage() {
         </TabsContent>
       </Tabs>
 
-      {/* ── Employee Dialog ──────────────────────────────────────────────────── */}
+      {/* ── Employee Dialog ─────────────────────────────────────────────────── */}
       <Dialog open={empDialogOpen} onOpenChange={setEmpDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingEmp ? 'Edit Employee' : 'Add Employee'}</DialogTitle>
-            <DialogDescription>Fill in the employee details below.</DialogDescription>
+            <DialogDescription>Fill in staff contact details and payroll salary.</DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3 py-2">
             <div className="col-span-2 space-y-1">
               <Label>Full Name *</Label>
-              <Input placeholder="e.g. Ramesh Kumar" value={empForm.name} onChange={(e) => setEmpForm((p) => ({ ...p, name: e.target.value }))} />
+              <Input
+                placeholder="e.g. Ramesh Kumar"
+                value={empForm.name}
+                onChange={(e) => setEmpForm((p) => ({ ...p, name: e.target.value }))}
+              />
             </div>
             <div className="space-y-1">
-              <Label>Designation *</Label>
-              <Input placeholder="e.g. Mechanic" value={empForm.designation} onChange={(e) => setEmpForm((p) => ({ ...p, designation: e.target.value }))} />
+              <Label>Designation / Role *</Label>
+              <Input
+                placeholder="e.g. Senior Mechanic"
+                value={empForm.designation}
+                onChange={(e) => setEmpForm((p) => ({ ...p, designation: e.target.value }))}
+              />
             </div>
             <div className="space-y-1">
-              <Label>Phone</Label>
-              <Input placeholder="9876543210" value={empForm.phone} onChange={(e) => setEmpForm((p) => ({ ...p, phone: e.target.value }))} />
-            </div>
-            <div className="space-y-1">
-              <Label>Email</Label>
-              <Input type="email" placeholder="email@example.com" value={empForm.email} onChange={(e) => setEmpForm((p) => ({ ...p, email: e.target.value }))} />
+              <Label>Phone Number</Label>
+              <Input
+                placeholder="e.g. 9876543210"
+                value={empForm.phone}
+                onChange={(e) => setEmpForm((p) => ({ ...p, phone: e.target.value }))}
+              />
             </div>
             <div className="space-y-1">
               <Label>Monthly Salary (₹)</Label>
-              <Input type="number" placeholder="0" value={empForm.salary || ''} onChange={(e) => setEmpForm((p) => ({ ...p, salary: Number(e.target.value) }))} />
+              <Input
+                type="number"
+                placeholder="25000"
+                value={empForm.salary || ''}
+                onChange={(e) => setEmpForm((p) => ({ ...p, salary: Number(e.target.value) }))}
+              />
             </div>
             <div className="space-y-1">
               <Label>Date of Birth</Label>
-              <Input type="date" value={empForm.dateOfBirth} onChange={(e) => setEmpForm((p) => ({ ...p, dateOfBirth: e.target.value }))} />
-            </div>
-            <div className="space-y-1">
-              <Label>Date of Joining</Label>
-              <Input type="date" value={empForm.dateOfJoining} onChange={(e) => setEmpForm((p) => ({ ...p, dateOfJoining: e.target.value }))} />
+              <Input
+                type="date"
+                value={empForm.dateOfBirth}
+                onChange={(e) => setEmpForm((p) => ({ ...p, dateOfBirth: e.target.value }))}
+              />
             </div>
             <div className="col-span-2 space-y-1">
               <Label>Notes</Label>
-              <Textarea placeholder="Any additional notes..." value={empForm.notes} onChange={(e) => setEmpForm((p) => ({ ...p, notes: e.target.value }))} rows={2} />
+              <Textarea
+                placeholder="Emergency contact, skills, notes..."
+                value={empForm.notes}
+                onChange={(e) => setEmpForm((p) => ({ ...p, notes: e.target.value }))}
+                rows={2}
+              />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEmpDialogOpen(false)}>Cancel</Button>
-            <Button onClick={saveEmployee} disabled={empSaving} className="gap-2">
+            <Button onClick={saveEmployee} disabled={empSaving} className="gap-2 bg-primary">
               {empSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              {editingEmp ? 'Update' : 'Add Employee'}
+              {editingEmp ? 'Update Staff' : 'Save Staff'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ── Delete Employee Confirm ──────────────────────────────────────────── */}
+      {/* ── Delete Employee Confirm ─────────────────────────────────────────── */}
       <AlertDialog open={!!deleteEmpId} onOpenChange={(o) => !o && setDeleteEmpId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove Employee?</AlertDialogTitle>
-            <AlertDialogDescription>This will permanently delete the employee record. This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>Remove Team Member?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this employee from the payroll record.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={deleteEmployee} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={deleteEmployee} className="bg-destructive hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ── Clear Data Confirm ───────────────────────────────────────────────── */}
+      {/* ── Clear Data Confirm ──────────────────────────────────────────────── */}
       <AlertDialog open={!!clearTarget} onOpenChange={(o) => !o && setClearTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -815,7 +1243,7 @@ export default function SettingsPage() {
               <ShieldAlert className="h-5 w-5" /> Clear all {clearTarget}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete ALL records in the <strong>{clearTarget}</strong> collection. This action <strong>cannot be undone</strong>. Make sure you have a backup first.
+              This will permanently delete ALL records in the <strong>{clearTarget}</strong> collection. This action <strong>cannot be undone</strong>. Make sure you have exported a JSON backup first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

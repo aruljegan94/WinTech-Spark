@@ -60,7 +60,11 @@ import {
   FilePlus2,
   Users,
   Percent,
+  ArrowUpDown,
+  RotateCcw,
+  X,
 } from 'lucide-react';
+import { format, startOfDay, endOfDay } from 'date-fns';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import {
   collection,
@@ -92,7 +96,10 @@ export default function CustomersPage() {
   const { toast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'pending' | 'offers'>('all');
+  const [filterType, setFilterType] = useState<'all' | 'pending' | 'cleared' | 'offers'>('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [sortBy, setSortBy] = useState<string>('name-asc');
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
@@ -113,11 +120,12 @@ export default function CustomersPage() {
   );
   const { data: customers, isLoading } = useCollection<Customer>(customersQuery);
 
-  // Filtered customers
+  // Filtered & Sorted customers
   const filteredCustomers = useMemo(() => {
-    return (customers || []).filter((c) => {
-      const q = searchTerm.toLowerCase();
+    let list = (customers || []).filter((c) => {
+      const q = searchTerm.toLowerCase().trim();
       const matchesSearch =
+        !q ||
         c.name.toLowerCase().includes(q) ||
         (c.mobile && c.mobile.includes(q)) ||
         (c.address && c.address.toLowerCase().includes(q)) ||
@@ -127,14 +135,66 @@ export default function CustomersPage() {
       if (!matchesSearch) return false;
 
       if (filterType === 'pending') {
-        return (c.pendingDue || 0) > 0;
+        if ((c.pendingDue || 0) <= 0) return false;
+      } else if (filterType === 'cleared') {
+        if ((c.pendingDue || 0) > 0) return false;
+      } else if (filterType === 'offers') {
+        if (!Boolean(c.offers && c.offers.trim().length > 0)) return false;
       }
-      if (filterType === 'offers') {
-        return Boolean(c.offers && c.offers.trim().length > 0);
+
+      if (startDate && c.createdAt) {
+        const start = startOfDay(new Date(startDate));
+        if (new Date(c.createdAt) < start) return false;
       }
+
+      if (endDate && c.createdAt) {
+        const end = endOfDay(new Date(endDate));
+        if (new Date(c.createdAt) > end) return false;
+      }
+
       return true;
     });
-  }, [customers, searchTerm, filterType]);
+
+    list = [...list].sort((a, b) => {
+      switch (sortBy) {
+        case 'name-asc':
+          return a.name.localeCompare(b.name);
+        case 'name-desc':
+          return b.name.localeCompare(a.name);
+        case 'due-desc':
+          return (b.pendingDue || 0) - (a.pendingDue || 0);
+        case 'due-asc':
+          return (a.pendingDue || 0) - (b.pendingDue || 0);
+        case 'spent-desc':
+          return (b.totalSpent || 0) - (a.totalSpent || 0);
+        case 'invoices-desc':
+          return (b.totalInvoices || 0) - (a.totalInvoices || 0);
+        case 'date-desc':
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        case 'date-asc':
+          return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+        default:
+          return 0;
+      }
+    });
+
+    return list;
+  }, [customers, searchTerm, filterType, startDate, endDate, sortBy]);
+
+  const hasActiveFilters =
+    searchTerm !== '' ||
+    filterType !== 'all' ||
+    startDate !== '' ||
+    endDate !== '' ||
+    sortBy !== 'name-asc';
+
+  const resetFilters = () => {
+    setSearchTerm('');
+    setFilterType('all');
+    setStartDate('');
+    setEndDate('');
+    setSortBy('name-asc');
+  };
 
   // Analytics Metrics
   const metrics = useMemo(() => {
@@ -315,7 +375,7 @@ export default function CustomersPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <PageHeader
         title="Customers"
         description="Manage customer profiles, credit dues, special promotional offers, and invoice history."
@@ -327,60 +387,60 @@ export default function CustomersPage() {
       </PageHeader>
 
       {/* Analytics & Summary Stat Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
         <Card className="hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Total Customers</CardTitle>
-            <Users className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+          <CardHeader className="flex flex-row items-center justify-between pb-1 space-y-0 px-3 py-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Total Customers</CardTitle>
+            <Users className="h-4 w-4 text-blue-600 dark:text-blue-400" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{metrics.totalCustomers}</div>
-            <p className="text-xs text-muted-foreground mt-1">
+          <CardContent className="px-3 pb-2 pt-0">
+            <div className="text-xl font-bold">{metrics.totalCustomers}</div>
+            <p className="text-xs text-muted-foreground">
               Registered customers in database
             </p>
           </CardContent>
         </Card>
 
         <Card className="hover:shadow-md transition-shadow border-amber-200 dark:border-amber-900/50">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Pending Credit Due</CardTitle>
-            <Wallet className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+          <CardHeader className="flex flex-row items-center justify-between pb-1 space-y-0 px-3 py-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Pending Credit Due</CardTitle>
+            <Wallet className="h-4 w-4 text-amber-600 dark:text-amber-400" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+          <CardContent className="px-3 pb-2 pt-0">
+            <div className="text-xl font-bold text-amber-600 dark:text-amber-400">
               ₹{metrics.totalPendingDue.toLocaleString('en-IN')}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground">
               {metrics.customersWithDue} customer{metrics.customersWithDue === 1 ? '' : 's'} with outstanding credit
             </p>
           </CardContent>
         </Card>
 
         <Card className="hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Active Offers / Deals</CardTitle>
-            <Tag className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+          <CardHeader className="flex flex-row items-center justify-between pb-1 space-y-0 px-3 py-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Active Offers / Deals</CardTitle>
+            <Tag className="h-4 w-4 text-purple-600 dark:text-purple-400" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
+          <CardContent className="px-3 pb-2 pt-0">
+            <div className="text-xl font-bold text-purple-600 dark:text-purple-400">
               {metrics.customersWithOffers}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground">
               Customers eligible for special discounts
             </p>
           </CardContent>
         </Card>
 
         <Card className="hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Customer Revenue</CardTitle>
-            <IndianRupee className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+          <CardHeader className="flex flex-row items-center justify-between pb-1 space-y-0 px-3 py-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Customer Revenue</CardTitle>
+            <IndianRupee className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+          <CardContent className="px-3 pb-2 pt-0">
+            <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
               ₹{metrics.totalLifetimeSales.toLocaleString('en-IN')}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground">
               Lifetime sales from registered customers
             </p>
           </CardContent>
@@ -389,83 +449,167 @@ export default function CustomersPage() {
 
       {/* Main Customers List Card */}
       <Card>
-        <CardHeader className="pb-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <CardTitle>Customer Directory</CardTitle>
-              <CardDescription>
-                Search customer records, track receivables, or launch an invoice with 1-click.
-              </CardDescription>
+        <CardHeader className="p-3 pb-2.5 space-y-2 border-b">
+          {/* Top Line: Title, Count Badge, Clear Button */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-sm font-semibold tracking-tight">Customer Directory</CardTitle>
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 font-normal">
+                {filteredCustomers.length} {filteredCustomers.length === 1 ? 'customer' : 'customers'}
+              </Badge>
             </div>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search name, phone, address, offer..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8 text-sm"
-                />
-              </div>
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={resetFilters}
+                className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+                title="Reset filters"
+                type="button"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>Clear Filters</span>
+              </Button>
+            )}
+          </div>
 
-              {/* Filter Tabs */}
-              <div className="flex rounded-md border p-1 bg-muted/40">
-                <Button
-                  size="sm"
-                  variant={filterType === 'all' ? 'secondary' : 'ghost'}
-                  className="h-7 text-xs px-2.5"
-                  onClick={() => setFilterType('all')}
+          {/* Bottom Line: Full-width spacious filter bar */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Search input */}
+            <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Search name, phone, address, notes..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-8 pr-7 h-8 text-xs bg-background"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
+                  type="button"
                 >
-                  All ({customers?.length || 0})
-                </Button>
-                <Button
-                  size="sm"
-                  variant={filterType === 'pending' ? 'secondary' : 'ghost'}
-                  className="h-7 text-xs px-2.5 text-amber-600 dark:text-amber-400"
-                  onClick={() => setFilterType('pending')}
-                >
-                  Due ({metrics.customersWithDue})
-                </Button>
-                <Button
-                  size="sm"
-                  variant={filterType === 'offers' ? 'secondary' : 'ghost'}
-                  className="h-7 text-xs px-2.5 text-purple-600 dark:text-purple-400"
-                  onClick={() => setFilterType('offers')}
-                >
-                  Offers ({metrics.customersWithOffers})
-                </Button>
-              </div>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
+
+            {/* Date Range: cleanly encapsulated */}
+            <div className="flex items-center gap-1.5 border rounded-md px-2 py-0.5 bg-background shadow-2xs">
+              <span className="text-[11px] font-medium text-muted-foreground">From:</span>
+              <Input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="h-7 w-[125px] border-0 bg-transparent text-xs px-1 shadow-none focus-visible:ring-0"
+              />
+              <span className="text-muted-foreground/40 text-xs">|</span>
+              <span className="text-[11px] font-medium text-muted-foreground">To:</span>
+              <Input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="h-7 w-[125px] border-0 bg-transparent text-xs px-1 shadow-none focus-visible:ring-0"
+              />
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex rounded-md border p-0.5 bg-background h-8 items-center">
+              <Button
+                size="sm"
+                variant={filterType === 'all' ? 'secondary' : 'ghost'}
+                className="h-6 text-[11px] px-2.5"
+                onClick={() => setFilterType('all')}
+                type="button"
+              >
+                All
+              </Button>
+              <Button
+                size="sm"
+                variant={filterType === 'pending' ? 'secondary' : 'ghost'}
+                className="h-6 text-[11px] px-2.5 text-amber-600 dark:text-amber-400 font-medium"
+                onClick={() => setFilterType('pending')}
+                type="button"
+              >
+                Due ({metrics.customersWithDue})
+              </Button>
+              <Button
+                size="sm"
+                variant={filterType === 'cleared' ? 'secondary' : 'ghost'}
+                className="h-6 text-[11px] px-2.5 text-emerald-600 dark:text-emerald-400 font-medium"
+                onClick={() => setFilterType('cleared')}
+                type="button"
+              >
+                Cleared
+              </Button>
+              <Button
+                size="sm"
+                variant={filterType === 'offers' ? 'secondary' : 'ghost'}
+                className="h-6 text-[11px] px-2.5 text-purple-600 dark:text-purple-400 font-medium"
+                onClick={() => setFilterType('offers')}
+                type="button"
+              >
+                Offers
+              </Button>
+            </div>
+
+            {/* Sorting Filter */}
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="h-8 text-xs w-[145px] bg-background">
+                <div className="flex items-center gap-1.5 truncate">
+                  <ArrowUpDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                  <SelectValue placeholder="Sort by" />
+                </div>
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value="name-asc">Name (A → Z)</SelectItem>
+                <SelectItem value="name-desc">Name (Z → A)</SelectItem>
+                <SelectItem value="due-desc">Due: High → Low</SelectItem>
+                <SelectItem value="due-asc">Due: Low → High</SelectItem>
+                <SelectItem value="spent-desc">Spent: High → Low</SelectItem>
+                <SelectItem value="invoices-desc">Invoices: High → Low</SelectItem>
+                <SelectItem value="date-desc">Newest Added</SelectItem>
+                <SelectItem value="date-asc">Oldest Added</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardHeader>
 
-        <CardContent>
+        <CardContent className="p-0">
           {isLoading ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm">Loading customer directory...</p>
             </div>
           ) : filteredCustomers.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="flex flex-col items-center justify-center py-16 text-center p-4">
               <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
                 <UserCheck className="h-8 w-8 text-muted-foreground" />
               </div>
               <h3 className="text-lg font-semibold">No customers found</h3>
               <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-                {searchTerm || filterType !== 'all'
+                {hasActiveFilters
                   ? 'No customer matched your search or active filter criteria.'
                   : 'Get started by creating your first customer profile to track credits, offers, and invoices.'}
               </p>
-              <Button onClick={openAddModal} className="mt-4 gap-2">
-                <Plus className="h-4 w-4" />
-                Add First Customer
-              </Button>
+              {hasActiveFilters ? (
+                <Button variant="outline" size="sm" onClick={resetFilters} className="mt-3 text-xs gap-1.5">
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Clear Filters
+                </Button>
+              ) : (
+                <Button onClick={openAddModal} className="mt-4 gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add First Customer
+                </Button>
+              )}
             </div>
           ) : (
-            <div className="rounded-md border overflow-x-auto">
+            <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-muted/30">
+                  <TableRow className="hover:bg-transparent">
                     <TableHead className="min-w-[180px]">Customer Name</TableHead>
                     <TableHead className="min-w-[150px]">Contact Info</TableHead>
                     <TableHead className="min-w-[180px]">Address</TableHead>

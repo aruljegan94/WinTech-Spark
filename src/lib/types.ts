@@ -9,6 +9,7 @@ export type Product = {
   stockQuantity: number;
   gstPercentage: number;
   barcode?: string;
+  markupPercentage?: number;
 };
 
 export type Vendor = {
@@ -22,6 +23,8 @@ export type Vendor = {
   pendingAmount: number;
   notes?: string;
   createdAt?: string;
+  totalPurchases?: number;
+  totalInvoices?: number;
 };
 
 export type PurchaseItem = {
@@ -44,6 +47,35 @@ export type Purchase = {
   amountPaid: number;
   dueDate?: string; // ISO or YYYY-MM-DD string
   paymentNotes?: string;
+};
+
+export type PurchaseOrderItem = {
+  productId?: string;
+  productName: string;
+  quantity: number;
+  unit: string; // Nos, Pcs, Ltr, Box, Kg, Mtr, Set, Pkt, Can, Pair, etc.
+  estimatedPrice: number; // Unit price
+  estimatedTotal: number; // quantity * estimatedPrice
+  notes?: string;
+};
+
+export type PurchaseOrder = {
+  id: string;
+  orderNumber: string; // e.g. PO-2026-001
+  vendorId?: string;
+  vendorName: string;
+  vendorPhone?: string;
+  vendorGst?: string;
+  vendorAddress?: string;
+  date: string; // ISO string
+  expectedDeliveryDate?: string; // YYYY-MM-DD
+  items: PurchaseOrderItem[];
+  totalQuantity: number;
+  totalEstimatedAmount: number;
+  status: 'Draft' | 'Sent' | 'Received' | 'Cancelled';
+  notes?: string;
+  createdAt: string; // ISO string
+  updatedAt?: string;
 };
 
 export type Customer = {
@@ -78,6 +110,7 @@ export type Sale = {
   customerName?: string;
   customerMobile?: string;
   customerAddress?: string;
+  customerGstNo?: string;
   items: SaleItem[];
   subtotal: number;
   gstAmount: number;
@@ -88,6 +121,7 @@ export type Sale = {
   status: 'Paid' | 'Pending' | 'Partial';
   dueDate?: string;
   notes?: string;
+  placeOfSupply?: string;
 };
 
 
@@ -118,6 +152,15 @@ export type CompanyProfile = {
   isDefault?: boolean;
   invoicePrefix?: string;
   invoiceSuffix?: string;
+  email?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  bankIfsc?: string;
+  bankBranch?: string;
+  upiId?: string;
+  termsAndConditions?: string;
+  state?: string;
+  stateCode?: string;
 };
 
 export type NotificationType =
@@ -211,6 +254,7 @@ export type AnalysisData = {
 export const AnalyzeSalesInputSchema = z.object({
     sales: z.array(z.any()), // Using any for simplicity; replace with Sale schema if available
     products: z.array(z.any()), // Using any for simplicity; replace with Product schema if available
+    customers: z.array(z.any()).optional(),
 });
 export type AnalyzeSalesInput = z.infer<typeof AnalyzeSalesInputSchema>;
 

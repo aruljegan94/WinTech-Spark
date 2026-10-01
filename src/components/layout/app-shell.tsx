@@ -32,6 +32,8 @@ import {
   ChevronLeft,
   ChevronRight,
   PanelLeft,
+  ClipboardList,
+  Barcode,
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
@@ -75,6 +77,7 @@ const baseNavSections: NavSection[] = [
     label: "Inventory",
     items: [
       { href: "/products", icon: Boxes, label: "Products" },
+      { href: "/orders", icon: ClipboardList, label: "Orders" },
       { href: "/purchases", icon: ShoppingCart, label: "Purchases" },
       { href: "/vendors", icon: Store, label: "Vendors" },
     ],
@@ -91,6 +94,7 @@ const baseNavSections: NavSection[] = [
     label: "System",
     items: [
       { href: "/settings", icon: Settings, label: "Settings" },
+      { href: "/barcodes", icon: Barcode, label: "Barcode Labels" },
     ],
   },
 ];
@@ -388,7 +392,7 @@ export default function AppShell({
         {/* Main Content Area */}
         <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
           <AppHeader user={currentUser} />
-          <main className="flex-1 overflow-y-auto p-4 flex flex-col min-h-0">
+          <main className="flex-1 overflow-y-auto px-3 py-2 flex flex-col min-h-0">
             {children}
           </main>
         </div>

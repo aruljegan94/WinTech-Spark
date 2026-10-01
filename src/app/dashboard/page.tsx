@@ -65,7 +65,7 @@ export default function DashboardPage() {
     const paidCount       = mthList.filter(s => s.paymentStatus === 'Paid').length;
     const pendingCount    = mthList.filter(s => s.paymentStatus !== 'Paid').length;
     const pendingValue    = mthList.filter(s => s.paymentStatus !== 'Paid')
-                              .reduce((a, s) => a + Math.max(0, s.total - (s.amountPaid ?? s.total)), 0);
+                              .reduce((a, s) => a + Math.max(0, s.total - (s.amountPaid ?? 0)), 0);
     const recentSales     = sales
       ? [...sales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10)
       : [];

@@ -1,57 +1,62 @@
 'use server';
 /**
- * @fileOverview A flow to analyze business data (sales, products) and generate a report.
+ * @fileOverview A flow to analyze business data (sales, products, customers) and generate a comprehensive growth strategy.
  *
- * - analyzeSales - Analyzes sales and products to create a business intelligence report.
+ * - analyzeSales - Analyzes sales, products, and customer trends to create an actionable business growth intelligence report.
  */
 
 import { ai } from '@/ai/genkit';
 import { z } from 'zod';
 import { AnalyzeSalesInput, AnalyzeSalesOutput, AnalyzeSalesInputSchema, AnalyzeSalesOutputSchema } from '@/lib/types';
 
-
 export async function analyzeSales(input: AnalyzeSalesInput): Promise<AnalyzeSalesOutput> {
   return analyzeSalesFlow(input);
 }
-
 
 const prompt = ai.definePrompt({
   name: 'analyzeSalesPrompt',
   input: { schema: AnalyzeSalesInputSchema },
   output: { schema: AnalyzeSalesOutputSchema },
-  system: `You are an expert business analyst for a small automobile shop.
-Your task is to analyze JSON data containing all sales and all products.
-Based on this data, you must generate a comprehensive business intelligence report with actionable insights for the shop owner.
+  system: `You are a world-class retail business growth consultant and financial analyst specializing in automotive spare parts, workshops, and retail inventory businesses.
 
-The report should be well-structured, easy to read, and provide clear takeaways. Use markdown for formatting.
+Your goal is NOT to write generic observations. Your goal is to give the business owner a HIGH-IMPACT, REALISTIC, DATA-BACKED GROWTH PLAYBOOK with exact numbers, prioritized recommendations, and clear steps to grow revenue, expand profit margins, and maximize customer retention.
 
-Structure your report as follows:
+Structure your report into the following clean, executive sections using clear GitHub-flavored markdown:
 
-### 📈 Business Performance Summary
-- Start with a high-level overview. Mention total revenue and total profit from the provided sales data.
-- Highlight the best-selling product by revenue.
-- Highlight the most profitable product overall.
+---
+### 📈 1. Executive Performance & Financial Health
+- **Revenue & Gross Profit Health**: Analyze total revenue, total gross profit, and overall profit margin percentage. Compare high-performing categories against weaker ones.
+- **Top Revenue Driver**: Which product generated the highest gross revenue and why.
+- **Top Margin Champion**: Which product yielded the highest absolute gross profit.
 
-### 🚀 Top Performing Products
-- List the top 3-5 products based on the highest **sales revenue**.
-- For each, mention the revenue generated and the number of units sold.
+---
+### 👥 2. Customer Analytics & Retention Intelligence
+- **Customer Base Health**: Evaluate the customer repeat purchase rate, Average Order Value (AOV), and customer spend distribution.
+- **VIP Customer Value**: Highlight top-tier spending customers and suggest a VIP retention/perk strategy to ensure they never defect to competitors.
+- **At-Risk & Inactive Customers**: Provide a concrete win-back strategy (SMS/WhatsApp offer, seasonal service checkup) for customers who haven't returned recently.
+- **Credit & Dues Recovery**: If there are outstanding customer balances (pending credit), advise on credit control and structured follow-up policies without damaging customer goodwill.
 
-### 🐢 Slow-Moving Products
-- List products that have sold only 1 or 2 units.
-- Suggest potential actions, like offering a discount or bundling them with popular items.
+---
+### 🚀 3. Revenue Acceleration & Basket-Size Expansion
+- **Cross-Selling & Bundling**: Propose 2-3 specific product bundles (e.g., pairing fast-moving tubes or spare parts with maintenance services or consumables like lubricants) to increase Average Order Value (AOV) by 15-25%.
+- **Price Optimization**: Identify products where a 5% to 10% price markup would meet low price sensitivity and drop straight to the bottom-line profit.
 
-### 🚫 Zero-Sales Products (Dead Stock)
-- List all products that have **zero** sales. This is critical information.
-- Strongly advise the owner to consider liquidating this stock to free up capital and space. Mention the total value of this dead stock (quantity * purchasePrice).
+---
+### 📦 4. Inventory Capital & Dead Stock Liquidation Plan
+- **Dead Stock Trapped Capital**: Explicitly calculate the total capital trapped in zero-sale inventory (Stock Quantity × Purchase Price).
+- **Liquidation Playbook**: Give 3 distinct, creative methods to liquidate slow-moving/dead inventory within the next 30 days (e.g., clearance discount, free gift with high-value purchases, service package add-on).
+- **Fast-Mover Stockout Warning**: Warn about top-selling items with low remaining inventory to avoid lost revenue from stockouts.
 
-### 💰 Profitability Insights
-- List the top 3-5 most **profitable** products (profit per item * quantity sold).
-- Explain why focusing on these products is important for the business's health.
+---
+### 🎯 5. The 7-Day & 30-Day Growth Roadmap
+Give a crisp, prioritized table or checklist of exact actions:
+| Timeline | Priority | Strategic Action | Target Outcome |
+| :--- | :--- | :--- | :--- |
+| Next 7 Days | Quick Win | ... | ... |
+| Next 14 Days | High Impact | ... | ... |
+| Next 30 Days | Strategic | ... | ... |
 
-###  actionable Recommendations
-- Conclude with a short, bulleted list of 3-4 clear, actionable recommendations for the shop owner based on your analysis. For example: "Restock more of [Product X]", "Create a promotion for [Product Y]", "Stop ordering [Product Z]".
-
-Analyze the following business data to generate the report.
+Make every insight sharp, practical, and grounded in the numbers provided.
 `,
   prompt: `
     **Sales Data**:
@@ -63,7 +68,14 @@ Analyze the following business data to generate the report.
     \`\`\`json
     {{{json products}}}
     \`\`\`
-    `,
+
+    {{#if customers}}
+    **Customer Data**:
+    \`\`\`json
+    {{{json customers}}}
+    \`\`\`
+    {{/if}}
+  `,
 });
 
 const analyzeSalesFlow = ai.defineFlow(
@@ -73,41 +85,44 @@ const analyzeSalesFlow = ai.defineFlow(
     outputSchema: z.custom<AnalyzeSalesOutput>(),
   },
   async (data) => {
-    
-    // Simple pre-processing to enrich sales data for the model
-    const processedSales = data.sales.map(sale => {
-        const itemsWithProfit = sale.items.map((item: any) => {
-            const product = data.products.find((p: any) => p.id === item.productId);
-            const purchasePrice = product ? product.purchasePrice : 0;
-            const profit = (item.price - purchasePrice) * item.quantity;
-            return {
-                ...item,
-                purchasePrice,
-                profit
-            };
-        });
-        const totalProfit = itemsWithProfit.reduce((sum: number, item: any) => sum + item.profit, 0);
+    // Enrich sales data with profit calculations
+    const processedSales = (data.sales || []).map((sale: any) => {
+      const itemsWithProfit = (sale.items || []).map((item: any) => {
+        const product = (data.products || []).find((p: any) => p.id === item.productId);
+        const purchasePrice = product ? Number(product.purchasePrice) || 0 : 0;
+        const profit = ((Number(item.price) || 0) - purchasePrice) * (Number(item.quantity) || 1);
         return {
-            ...sale,
-            items: itemsWithProfit,
-            totalProfit
+          ...item,
+          purchasePrice,
+          profit,
         };
+      });
+      const totalProfit = itemsWithProfit.reduce((sum: number, item: any) => sum + item.profit, 0);
+      return {
+        ...sale,
+        items: itemsWithProfit,
+        totalProfit,
+      };
     });
 
     try {
-        const { output } = await prompt({ sales: processedSales, products: data.products });
+      const { output } = await prompt({
+        sales: processedSales,
+        products: data.products || [],
+        customers: data.customers || [],
+      });
 
-        if (!output) {
-            return { report: 'Analysis could not be generated.' };
-        }
-        
-        return output;
+      if (!output) {
+        return { report: 'Analysis could not be generated at this time.' };
+      }
+
+      return output;
     } catch (e: any) {
-        if (e.message?.includes('503')) {
-            throw new Error('The AI model is currently overloaded. Please try again in a moment.');
-        }
-        console.error("Error in analyzeSalesFlow: ", e);
-        throw new Error('An unexpected error occurred during analysis.');
+      if (e.message?.includes('503')) {
+        throw new Error('The AI model is currently busy. Please retry in a few seconds.');
+      }
+      console.error('Error in analyzeSalesFlow:', e);
+      throw new Error(e.message || 'An unexpected error occurred during business analysis.');
     }
   }
 );

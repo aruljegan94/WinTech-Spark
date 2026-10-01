@@ -1,7 +1,6 @@
-
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -31,10 +30,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useFirestore, setDocumentNonBlocking, useUser } from '@/firebase';
-import { doc } from 'firebase/firestore';
-import { Loader2 } from 'lucide-react';
+import { useFirestore, useAuth, useUser } from '@/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { updateProfile } from 'firebase/auth';
+import { Loader2, UserCheck } from 'lucide-react';
 import type { User } from '@/lib/types';
+import { useRouter } from 'next/navigation';
 
 const editUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -53,7 +54,9 @@ interface EditUserDialogProps {
 export function EditUserDialog({ isOpen, onOpenChange, user }: EditUserDialogProps) {
   const { toast } = useToast();
   const firestore = useFirestore();
-  const { user: currentUser } = useUser();
+  const auth = useAuth();
+  const router = useRouter();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<EditUserFormValues>({
     resolver: zodResolver(editUserSchema),
@@ -65,42 +68,60 @@ export function EditUserDialog({ isOpen, onOpenChange, user }: EditUserDialogPro
   });
 
   useEffect(() => {
-    if (user) {
+    if (user && isOpen) {
       form.reset({
-        name: user.name,
+        name: user.name || '',
         phoneNumber: user.phoneNumber || '',
-        role: user.role,
+        role: user.role || 'Viewer',
       });
     }
-  }, [user, form]);
-
-  const { isSubmitting } = form.formState;
+  }, [user, form, isOpen]);
 
   const onSubmit = async (data: EditUserFormValues) => {
-    if (!firestore || !user) return;
+    if (!firestore || !user?.id) {
+      toast({ variant: 'destructive', title: 'Error', description: 'User record or database connection missing.' });
+      return;
+    }
 
+    setIsSubmitting(true);
     try {
       const userDocRef = doc(firestore, 'users', user.id);
       const updatedData: Partial<User> = {
-        name: data.name,
-        phoneNumber: data.phoneNumber,
+        name: data.name.trim(),
+        phoneNumber: data.phoneNumber?.trim() || '',
         role: data.role,
       };
 
-      setDocumentNonBlocking(userDocRef, updatedData, { merge: true });
+      // 1. Persist to Firestore users document
+      await setDoc(userDocRef, updatedData, { merge: true });
+
+      // 2. If editing the currently authenticated user, update Firebase Auth profile too
+      if (auth?.currentUser && auth.currentUser.uid === user.id) {
+        try {
+          await updateProfile(auth.currentUser, {
+            displayName: data.name.trim(),
+          });
+        } catch (authErr) {
+          console.warn('Auth displayName update warning:', authErr);
+        }
+      }
 
       toast({
-        title: 'User Updated',
-        description: `User ${data.name} has been successfully updated.`,
+        title: 'User Updated Successfully',
+        description: `Name updated to "${data.name.trim()}".`,
       });
+
       onOpenChange(false);
+      router.refresh();
     } catch (error: any) {
       console.error('Error updating user:', error);
       toast({
         variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to update user. Please try again.',
+        title: 'Update Failed',
+        description: error.message || 'Failed to update user. Please try again.',
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -108,11 +129,17 @@ export function EditUserDialog({ isOpen, onOpenChange, user }: EditUserDialogPro
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Edit User</DialogTitle>
+          <div className="flex items-center gap-2 text-primary">
+            <div className="p-1.5 rounded-md bg-primary/10">
+              <UserCheck className="h-4 w-4" />
+            </div>
+            <DialogTitle>Edit User Profile</DialogTitle>
+          </div>
           <DialogDescription>
-            Update the details for {user.name}.
+            Update name, phone number, and access permissions for <strong>{user?.name || user?.email}</strong>.
           </DialogDescription>
         </DialogHeader>
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
@@ -120,68 +147,74 @@ export function EditUserDialog({ isOpen, onOpenChange, user }: EditUserDialogPro
               name="name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Full Name</FormLabel>
+                  <FormLabel>Full Name *</FormLabel>
                   <FormControl>
-                    <Input placeholder="John Doe" {...field} />
+                    <Input placeholder="e.g. John Doe" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
+
             <FormItem>
-              <FormLabel>Email</FormLabel>
+              <FormLabel>Email Address</FormLabel>
               <Input
-                value={user.email}
+                value={user?.email || ''}
                 disabled
-                className="cursor-not-allowed bg-muted/50"
+                className="cursor-not-allowed bg-muted/60 text-muted-foreground font-mono text-xs"
               />
             </FormItem>
+
             <FormField
               control={form.control}
               name="phoneNumber"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Phone Number (Optional)</FormLabel>
+                  <FormLabel>Phone Number</FormLabel>
                   <FormControl>
-                    <Input placeholder="+1234567890" {...field} />
+                    <Input placeholder="e.g. +91 98765 43210" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
+
             <FormField
               control={form.control}
               name="role"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Role</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    defaultValue={field.value}
-                    disabled={user.id === currentUser?.uid}
-                  >
+                  <FormLabel>Role & Permissions *</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder="Select a role" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="Admin">Admin</SelectItem>
-                      <SelectItem value="Editor">Editor</SelectItem>
-                      <SelectItem value="Viewer">Viewer</SelectItem>
+                      <SelectItem value="Admin">Admin (Full Access & Settings)</SelectItem>
+                      <SelectItem value="Editor">Editor (Sales, Purchases, Inventory)</SelectItem>
+                      <SelectItem value="Viewer">Viewer (Read Only)</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
                 </FormItem>
               )}
             />
-            <DialogFooter>
+
+            <DialogFooter className="pt-2">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Save Changes
+              <Button type="submit" disabled={isSubmitting} className="min-w-[100px]">
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  'Save Changes'
+                )}
               </Button>
             </DialogFooter>
           </form>

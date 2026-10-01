@@ -112,3 +112,45 @@
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(200%); }
 }
+
+/* ── Compact density overrides ─────────────────────────────────────────── */
+@layer utilities {
+  /* Make every data table row tighter (36px rows = ~28% more rows visible) */
+  .compact-table tr th { @apply h-8 py-1.5; }
+  .compact-table tr td { @apply py-1.5; }
+
+  /* Tighten page-level stack spacing to maximise list visibility */
+  .page-stack { @apply flex flex-col gap-2; }
+}
+
+/* ── Print Media Optimization ─────────────────────────────────────────── */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  header,
+  aside,
+  [data-sidebar],
+  .print\:hidden,
+  nav,
+  button,
+  .no-print {
+    display: none !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+}

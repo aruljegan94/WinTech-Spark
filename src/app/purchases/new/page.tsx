@@ -165,8 +165,21 @@ export default function NewPurchasePage() {
 
         let vendorDocSnap = null;
         let vendorRef = null;
-        if (data.vendorId) {
-          vendorRef = doc(firestore, 'vendors', data.vendorId);
+        let resolvedVendorId = data.vendorId;
+
+        if (!resolvedVendorId && data.supplierName) {
+          const match = vendors?.find((v) =>
+            v.companyName.toLowerCase().trim() === data.supplierName.toLowerCase().trim() ||
+            v.name.toLowerCase().trim() === data.supplierName.toLowerCase().trim() ||
+            data.supplierName.toLowerCase().includes(v.companyName.toLowerCase().trim())
+          );
+          if (match) {
+            resolvedVendorId = match.id;
+          }
+        }
+
+        if (resolvedVendorId) {
+          vendorRef = doc(firestore, 'vendors', resolvedVendorId);
           vendorDocSnap = await transaction.get(vendorRef);
         }
 
@@ -196,12 +209,14 @@ export default function NewPurchasePage() {
 
         if (vendorRef && vendorDocSnap && vendorDocSnap.exists()) {
           const currentVendorPending = vendorDocSnap.data().pendingAmount || 0;
-          transaction.update(vendorRef, { pendingAmount: currentVendorPending + finalPending });
+          transaction.update(vendorRef, {
+            pendingAmount: currentVendorPending + finalPending,
+          });
         }
 
         transaction.set(purchaseRef, {
           supplierName: data.supplierName,
-          vendorId: data.vendorId || null,
+          vendorId: resolvedVendorId || null,
           invoiceNo: data.invoiceNo,
           date: data.date.toISOString(),
           items: purchaseItems,
@@ -285,11 +300,23 @@ export default function NewPurchasePage() {
                         <SelectItem value="custom">-- Enter Custom Supplier --</SelectItem>
                         {(vendors || []).map((v) => (
                           <SelectItem key={v.id} value={v.id}>
-                            {v.companyName} ({v.name})
+                            {v.companyName} ({v.name}) {v.pendingAmount > 0 ? `• ₹${v.pendingAmount.toLocaleString()} Due` : '• Clear'}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                    {form.watch('vendorId') && (() => {
+                      const selectedV = vendors?.find((v) => v.id === form.watch('vendorId'));
+                      if (!selectedV) return null;
+                      return (
+                        <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 mt-1">
+                          <span>Vendor Total Due:</span>
+                          <strong className={selectedV.pendingAmount > 0 ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-emerald-600 font-semibold'}>
+                            ₹{(selectedV.pendingAmount || 0).toLocaleString()}
+                          </strong>
+                        </p>
+                      );
+                    })()}
                   </FormItem>
 
                   <FormField
