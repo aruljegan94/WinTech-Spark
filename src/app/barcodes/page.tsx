@@ -25,6 +25,11 @@ import {
   Eye,
   Grid3X3,
   Building2,
+  Plus,
+  Minus,
+  Trash2,
+  ListChecks,
+  AlertTriangle,
 } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, where } from 'firebase/firestore';
@@ -156,6 +161,11 @@ export default function BarcodeGeneratorPage() {
   const [viewMode, setViewMode] = useState<'single' | 'sheet'>('single');
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
+  // Batch Mode States
+  const [mode, setMode] = useState<'single' | 'batch'>('single');
+  const [batchItems, setBatchItems] = useState<{ product: Product; quantity: number }[]>([]);
+  const [batchSearch, setBatchSearch] = useState<string>('');
+
   // Initialize company name from profile
   useEffect(() => {
     if (companyProfile?.companyName) {
@@ -256,6 +266,147 @@ export default function BarcodeGeneratorPage() {
     );
   }, [products, productSearch]);
 
+  // Batch Helpers
+  const handleAddBatchProduct = (prod: Product) => {
+    setBatchItems((prev) => {
+      const existing = prev.find((i) => i.product.id === prod.id);
+      if (existing) {
+        return prev.map((i) => (i.product.id === prod.id ? { ...i, quantity: i.quantity + 1 } : i));
+      }
+      return [...prev, { product: prod, quantity: 5 }];
+    });
+  };
+
+  const handleRemoveBatchProduct = (prodId: string) => {
+    setBatchItems((prev) => prev.filter((i) => i.product.id !== prodId));
+  };
+
+  const handleUpdateBatchQuantity = (prodId: string, quantity: number) => {
+    if (quantity <= 0) {
+      handleRemoveBatchProduct(prodId);
+      return;
+    }
+    setBatchItems((prev) =>
+      prev.map((i) => (i.product.id === prodId ? { ...i, quantity } : i))
+    );
+  };
+
+  const handleAddAllLowStock = () => {
+    if (!products) return;
+    const low = products.filter((p) => p.stockQuantity < 10);
+    if (low.length === 0) {
+      toast({ title: 'No Low Stock Items', description: 'All items currently have 10+ units.' });
+      return;
+    }
+    setBatchItems((prev) => {
+      const existingIds = new Set(prev.map((i) => i.product.id));
+      const toAdd = low
+        .filter((p) => !existingIds.has(p.id))
+        .map((p) => ({ product: p, quantity: 10 }));
+      return [...prev, ...toAdd];
+    });
+    toast({ title: 'Low Stock Items Added', description: `Added ${low.length} items to batch.` });
+  };
+
+  const handleSetAllBatchQty = (qty: number) => {
+    setBatchItems((prev) => prev.map((i) => ({ ...i, quantity: qty })));
+  };
+
+  const handleMatchStockQty = () => {
+    setBatchItems((prev) =>
+      prev.map((i) => ({ ...i, quantity: Math.max(1, i.product.stockQuantity || 1) }))
+    );
+  };
+
+  const handleClearBatch = () => {
+    setBatchItems([]);
+  };
+
+  // Flattened batch list of products for rendering
+  const flatBatchList = useMemo(() => {
+    return batchItems.flatMap((i) => Array(i.quantity).fill(i.product));
+  }, [batchItems]);
+
+  const batchTotalLabels = flatBatchList.length;
+
+  // Filtered products for batch search picker
+  const filteredBatchPickerProducts = useMemo(() => {
+    if (!products) return [];
+    if (!batchSearch.trim()) return products.slice(0, 15);
+    const q = batchSearch.toLowerCase();
+    return products
+      .filter(
+        (p) =>
+          p.productName.toLowerCase().includes(q) ||
+          (p.barcode && p.barcode.toLowerCase().includes(q)) ||
+          p.category.toLowerCase().includes(q)
+      )
+      .slice(0, 20);
+  }, [products, batchSearch]);
+
+  // Render a Product Label Component (used for batch items)
+  const renderProductLabel = (p: Product, keyIndex: number | string) => {
+    const isSmall = selectedSize.heightMm <= 25;
+    const bValue = p.barcode || `SKU-${p.id.slice(0, 8).toUpperCase()}`;
+    const barHeight = selectedSize.heightMm <= 25 ? 32 : 45;
+    const svgStr = generateBarcodeSVG(bValue, {
+      height: barHeight,
+      showText: showCodeText,
+      fontSize: 11,
+      barWidth: 2,
+    });
+
+    return (
+      <div
+        key={keyIndex}
+        className="label-sticker bg-white text-slate-900 border border-slate-300 rounded p-1.5 flex flex-col justify-between items-center text-center overflow-hidden shadow-xs select-none print:shadow-none print:border-slate-300"
+        style={{
+          width: `${selectedSize.widthMm * 3.78}px`,
+          height: `${selectedSize.heightMm * 3.78}px`,
+          maxWidth: '100%',
+        }}
+      >
+        {/* Top: Company / Brand */}
+        {showCompany && companyName && (
+          <div className="w-full text-[9px] font-black uppercase tracking-wider text-slate-700 truncate leading-tight border-b border-slate-200 pb-0.5">
+            {companyName}
+          </div>
+        )}
+
+        {/* Product Name */}
+        {showProduct && (
+          <div className={`w-full font-bold text-slate-900 leading-tight truncate px-1 ${isSmall ? 'text-[10px]' : 'text-xs'}`}>
+            {p.productName}
+          </div>
+        )}
+
+        {/* Barcode Vector Graphic */}
+        <div
+          className="w-full flex items-center justify-center my-0.5 px-1 overflow-hidden"
+          dangerouslySetInnerHTML={{ __html: svgStr }}
+          style={{ maxHeight: isSmall ? '55%' : '65%' }}
+        />
+
+        {/* Bottom Row: MRP & Subtitle */}
+        <div className="w-full flex items-center justify-between px-1 text-[9px] leading-tight pt-0.5 border-t border-slate-100">
+          {showPrice ? (
+            <div className="font-extrabold text-slate-900">
+              MRP: <span className="font-mono text-[10px]">₹{p.sellingPrice.toFixed(2)}</span>
+            </div>
+          ) : (
+            <div />
+          )}
+
+          {showSubtitle && customSubtitle && (
+            <div className="text-[8px] text-slate-500 font-medium truncate max-w-[50%]">
+              {customSubtitle}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // Render a Single Label Component
   const renderSingleLabel = (keyIndex: number = 0) => {
     const isSmall = selectedSize.heightMm <= 25;
@@ -322,16 +473,214 @@ export default function BarcodeGeneratorPage() {
           </Button>
           <Button size="sm" onClick={handlePrint} className="gap-1.5 font-semibold shadow-sm">
             <Printer className="h-4 w-4" />
-            Print Labels ({copies})
+            Print Labels ({mode === 'batch' ? batchTotalLabels : copies})
           </Button>
         </div>
       </PageHeader>
 
+      {/* ─── Mode Switcher ─────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 mb-4 p-1 rounded-xl bg-muted/60 max-w-md print:hidden">
+        <button
+          type="button"
+          onClick={() => setMode('single')}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
+            mode === 'single'
+              ? 'bg-background text-foreground shadow-xs'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Barcode className="h-3.5 w-3.5 text-primary" />
+          Single Product Designer
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setMode('batch');
+            setViewMode('sheet');
+          }}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
+            mode === 'batch'
+              ? 'bg-background text-foreground shadow-xs'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Layers className="h-3.5 w-3.5 text-amber-600" />
+          Multi-Product Batch Mode
+          {batchItems.length > 0 && (
+            <Badge variant="secondary" className="text-[10px] h-4 px-1 ml-0.5">
+              {batchItems.length}
+            </Badge>
+          )}
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* ─── LEFT: Configuration Panel (Hidden on Print) ────────────────── */}
         <div className="lg:col-span-5 space-y-5 print:hidden">
-          {/* Card 1: Product Selection */}
-          <Card className="shadow-sm">
+          {/* Card 1: Batch Mode Manager vs Single Product Info */}
+          {mode === 'batch' ? (
+            <Card className="shadow-sm border-amber-500/30">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                      <ListChecks className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base">Batch Label Products</CardTitle>
+                      <CardDescription className="text-xs">
+                        {batchItems.length} products • {batchTotalLabels} total stickers
+                      </CardDescription>
+                    </div>
+                  </div>
+                  {batchItems.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleClearBatch}
+                      className="text-xs h-7 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3.5">
+                {/* Batch Quick Action Tools */}
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddAllLowStock}
+                    className="text-[11px] h-7 gap-1 border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-50"
+                  >
+                    <AlertTriangle className="h-3 w-3" /> + Add Low Stock
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleSetAllBatchQty(5)}
+                    className="text-[11px] h-7"
+                  >
+                    Set All = 5
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleMatchStockQty}
+                    className="text-[11px] h-7"
+                  >
+                    Match Stock Qty
+                  </Button>
+                </div>
+
+                {/* Catalog Search & Add to Batch */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Search & Add Product to Batch</Label>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                    <Input
+                      placeholder="Search product name or barcode..."
+                      value={batchSearch}
+                      onChange={(e) => setBatchSearch(e.target.value)}
+                      className="pl-8 text-xs h-9"
+                    />
+                  </div>
+                  {batchSearch.trim() && (
+                    <div className="max-h-40 overflow-y-auto border rounded-lg divide-y bg-background text-xs shadow-xs">
+                      {filteredBatchPickerProducts.length === 0 ? (
+                        <div className="p-2 text-center text-muted-foreground">No matching products found</div>
+                      ) : (
+                        filteredBatchPickerProducts.map((p) => {
+                          const isAlreadyAdded = batchItems.some((i) => i.product.id === p.id);
+                          return (
+                            <div
+                              key={p.id}
+                              className="flex items-center justify-between p-2 hover:bg-muted/50 transition cursor-pointer"
+                              onClick={() => handleAddBatchProduct(p)}
+                            >
+                              <div className="truncate pr-2">
+                                <div className="font-semibold text-foreground truncate">{p.productName}</div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  ₹{p.sellingPrice} • Stock: {p.stockQuantity} • {p.barcode || 'Auto SKU'}
+                                </div>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant={isAlreadyAdded ? 'secondary' : 'default'}
+                                className="h-6 text-[10px] px-2"
+                              >
+                                {isAlreadyAdded ? '+1' : 'Add'}
+                              </Button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Batch Items List */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Products in Batch Queue</Label>
+                  {batchItems.length === 0 ? (
+                    <div className="p-4 border border-dashed rounded-lg text-center text-xs text-muted-foreground space-y-1">
+                      <Package className="h-6 w-6 mx-auto text-muted-foreground/60" />
+                      <p>Queue is empty. Search products above or click "+ Add Low Stock" to begin batch printing.</p>
+                    </div>
+                  ) : (
+                    <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                      {batchItems.map((item) => (
+                        <div
+                          key={item.product.id}
+                          className="flex items-center justify-between p-2 rounded-lg border bg-card text-xs shadow-2xs"
+                        >
+                          <div className="truncate pr-2">
+                            <div className="font-semibold text-foreground truncate">{item.product.productName}</div>
+                            <div className="text-[10px] text-muted-foreground">
+                              ₹{item.product.sellingPrice} • {item.product.barcode || 'Auto SKU'}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 w-6 p-0"
+                              onClick={() => handleUpdateBatchQuantity(item.product.id, item.quantity - 1)}
+                            >
+                              <Minus className="h-3 w-3" />
+                            </Button>
+                            <span className="w-6 text-center font-bold font-mono">{item.quantity}</span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 w-6 p-0"
+                              onClick={() => handleUpdateBatchQuantity(item.product.id, item.quantity + 1)}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0 text-rose-500 hover:text-rose-600 hover:bg-rose-50"
+                              onClick={() => handleRemoveBatchProduct(item.product.id)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            /* Card 1: Single Product Selection */
+            <Card className="shadow-sm">
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 <div className="p-1.5 rounded-lg bg-primary/10 text-primary">
@@ -451,6 +800,7 @@ export default function BarcodeGeneratorPage() {
               </div>
             </CardContent>
           </Card>
+        )}
 
           {/* Card 2: Label Dimensions & Content Controls */}
           <Card className="shadow-sm">
@@ -579,64 +929,104 @@ export default function BarcodeGeneratorPage() {
                 </div>
 
                 {/* View Mode Toggle */}
-                <div className="flex items-center gap-1 bg-muted p-1 rounded-lg self-start sm:self-auto text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('single')}
-                    className={`px-2.5 py-1 rounded font-medium transition-all ${
-                      viewMode === 'single' ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground'
-                    }`}
-                  >
-                    Single Label
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('sheet')}
-                    className={`px-2.5 py-1 rounded font-medium transition-all ${
-                      viewMode === 'sheet' ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground'
-                    }`}
-                  >
-                    Grid Sheet ({copies})
-                  </button>
-                </div>
+                {mode === 'single' ? (
+                  <div className="flex items-center gap-1 bg-muted p-1 rounded-lg self-start sm:self-auto text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('single')}
+                      className={`px-2.5 py-1 rounded font-medium transition-all ${
+                        viewMode === 'single' ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground'
+                      }`}
+                    >
+                      Single Label
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('sheet')}
+                      className={`px-2.5 py-1 rounded font-medium transition-all ${
+                        viewMode === 'sheet' ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground'
+                      }`}
+                    >
+                      Grid Sheet ({copies})
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                    Batch Queue: {batchTotalLabels} labels
+                  </div>
+                )}
               </div>
             </CardHeader>
 
             <CardContent className="p-4 sm:p-6 bg-muted/20 dark:bg-muted/10 min-h-[420px] flex flex-col justify-center items-center print:bg-white print:p-0">
-              {/* Single Label View */}
-              {viewMode === 'single' && (
-                <div className="flex flex-col items-center justify-center space-y-4 py-8">
-                  <div className="p-4 bg-white rounded-lg shadow-md border border-slate-300">
-                    {renderSingleLabel(0)}
-                  </div>
-                  <div className="text-center text-xs text-muted-foreground">
-                    Actual label scale preview. Ready for barcode thermal rolls or sheet printing.
-                  </div>
-                </div>
-              )}
-
-              {/* Sheet / Grid View (Multi-label) */}
-              {viewMode === 'sheet' && (
+              {/* Batch Mode Multi-Label View */}
+              {mode === 'batch' ? (
                 <div
                   ref={printContainerRef}
                   id="printable-barcode-sheet"
-                  className="bg-white p-4 sm:p-6 rounded-lg shadow-sm border border-slate-300 max-w-full overflow-x-auto print:border-none print:shadow-none print:p-0 print:m-0"
+                  className="bg-white p-4 sm:p-6 rounded-lg shadow-sm border border-slate-300 max-w-full overflow-x-auto print:border-none print:shadow-none print:p-0 print:m-0 w-full"
                 >
-                  <div
-                    className="grid gap-2 items-center justify-center print:gap-1.5"
-                    style={{
-                      gridTemplateColumns: selectedSize.cols
-                        ? `repeat(${selectedSize.cols}, minmax(0, 1fr))`
-                        : 'repeat(auto-fit, minmax(160px, 1fr))',
-                    }}
-                  >
-                    {Array.from({ length: Math.min(copies, 100) }).map((_, i) => (
-                      <div key={i} className="flex justify-center print:break-inside-avoid">
-                        {renderSingleLabel(i)}
-                      </div>
-                    ))}
-                  </div>
+                  {flatBatchList.length === 0 ? (
+                    <div className="text-center py-12 text-muted-foreground text-xs space-y-2">
+                      <Layers className="h-8 w-8 mx-auto text-muted-foreground/50" />
+                      <p className="font-semibold text-foreground">No Labels in Batch Queue</p>
+                      <p>Use the panel on the left to add products or click "+ Add Low Stock" to generate batch labels.</p>
+                    </div>
+                  ) : (
+                    <div
+                      className="grid gap-2 items-center justify-center print:gap-1.5"
+                      style={{
+                        gridTemplateColumns: selectedSize.cols
+                          ? `repeat(${selectedSize.cols}, minmax(0, 1fr))`
+                          : 'repeat(auto-fit, minmax(160px, 1fr))',
+                      }}
+                    >
+                      {flatBatchList.map((product, i) => (
+                        <div key={`${product.id}-${i}`} className="flex justify-center print:break-inside-avoid">
+                          {renderProductLabel(product, `${product.id}-${i}`)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+              ) : (
+                <>
+                  {/* Single Label View */}
+                  {viewMode === 'single' && (
+                    <div className="flex flex-col items-center justify-center space-y-4 py-8">
+                      <div className="p-4 bg-white rounded-lg shadow-md border border-slate-300">
+                        {renderSingleLabel(0)}
+                      </div>
+                      <div className="text-center text-xs text-muted-foreground">
+                        Actual label scale preview. Ready for barcode thermal rolls or sheet printing.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Sheet / Grid View (Multi-label) */}
+                  {viewMode === 'sheet' && (
+                    <div
+                      ref={printContainerRef}
+                      id="printable-barcode-sheet"
+                      className="bg-white p-4 sm:p-6 rounded-lg shadow-sm border border-slate-300 max-w-full overflow-x-auto print:border-none print:shadow-none print:p-0 print:m-0"
+                    >
+                      <div
+                        className="grid gap-2 items-center justify-center print:gap-1.5"
+                        style={{
+                          gridTemplateColumns: selectedSize.cols
+                            ? `repeat(${selectedSize.cols}, minmax(0, 1fr))`
+                            : 'repeat(auto-fit, minmax(160px, 1fr))',
+                        }}
+                      >
+                        {Array.from({ length: Math.min(copies, 100) }).map((_, i) => (
+                          <div key={i} className="flex justify-center print:break-inside-avoid">
+                            {renderSingleLabel(i)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>

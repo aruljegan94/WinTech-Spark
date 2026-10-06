@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -10,9 +10,19 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Printer, Check } from 'lucide-react';
+import { Printer, Check, Usb, AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
 import type { Sale, CompanyProfile } from '@/lib/types';
 import { format } from 'date-fns';
+import {
+  isWebSerialSupported,
+  getConnectedSerialPort,
+  requestSerialPort,
+  disconnectSerialPort,
+  directPrintViaWebSerial,
+  directTestPrintViaWebSerial,
+  printReceiptViaIframe,
+  printTestReceiptViaIframe,
+} from '@/lib/thermal-printer';
 
 interface ThermalPrintDialogProps {
   isOpen: boolean;
@@ -28,64 +38,224 @@ export function ThermalPrintDialog({
   companyProfile,
 }: ThermalPrintDialogProps) {
   const [paperWidth, setPaperWidth] = useState<'58mm' | '80mm'>('80mm');
+  const [hasSerialPort, setHasSerialPort] = useState(false);
+  const [isDirectPrinting, setIsDirectPrinting] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const handlePrint = () => {
-    window.print();
+  // Load saved paper width on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('spark_preferred_paper_size');
+      if (saved === '58mm' || saved === '80mm') {
+        setPaperWidth(saved);
+      }
+    }
+  }, []);
+
+  // Check for connected serial ports
+  useEffect(() => {
+    if (isOpen) {
+      checkSerialPort();
+    }
+  }, [isOpen]);
+
+  const checkSerialPort = async () => {
+    try {
+      const port = await getConnectedSerialPort();
+      setHasSerialPort(!!port);
+    } catch (_) {
+      setHasSerialPort(false);
+    }
+  };
+
+  const handleSetPaperWidth = (width: '58mm' | '80mm') => {
+    setPaperWidth(width);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('spark_preferred_paper_size', width);
+    }
+  };
+
+  const handleConnectPort = async () => {
+    try {
+      setStatusMessage(null);
+      await requestSerialPort();
+      setHasSerialPort(true);
+      setStatusMessage('Thermal printer connected successfully via USB/Serial!');
+      setTimeout(() => setStatusMessage(null), 3000);
+    } catch (err: any) {
+      if (err.name !== 'NotFoundError') {
+        setStatusMessage('Could not connect to USB printer. Check cable or driver.');
+      }
+    }
+  };
+
+  // 1. Direct Thermal Print (via Web Serial / ESC-POS)
+  const handleDirectPrint = async () => {
+    setIsDirectPrinting(true);
+    setStatusMessage(null);
+    try {
+      const is3Inch = paperWidth === '80mm';
+      await directPrintViaWebSerial(sale, companyProfile, is3Inch);
+      setHasSerialPort(true);
+      setStatusMessage('Receipt sent directly to thermal printer!');
+      setTimeout(() => {
+        setIsDirectPrinting(false);
+        onOpenChange(false);
+      }, 1000);
+    } catch (err: any) {
+      setIsDirectPrinting(false);
+      console.warn('Direct print failed, falling back to system print:', err);
+      // Fallback to system spooler with exact roll format
+      handleSystemPrint();
+    }
+  };
+
+  // 2. System Print (via isolated iframe with exact 80mm / 58mm roll format, Never A4)
+  const handleSystemPrint = () => {
+    const is3Inch = paperWidth === '80mm';
+    printReceiptViaIframe(sale, companyProfile, is3Inch);
+  };
+
+  // 3. Test Print
+  const handleTestPrint = async () => {
+    setIsTesting(true);
+    setStatusMessage(null);
+    const is3Inch = paperWidth === '80mm';
+    try {
+      if (hasSerialPort) {
+        await directTestPrintViaWebSerial(is3Inch);
+        setStatusMessage('Test receipt printed directly!');
+      } else {
+        printTestReceiptViaIframe(is3Inch);
+        setStatusMessage('Test receipt sent to system print!');
+      }
+    } catch (err) {
+      printTestReceiptViaIframe(is3Inch);
+    } finally {
+      setIsTesting(false);
+      setTimeout(() => setStatusMessage(null), 3000);
+    }
   };
 
   const formattedDate = sale.date ? format(new Date(sale.date), 'dd-MMM-yyyy hh:mm a') : '';
-  const formattedDueDate = sale.date
-    ? format(new Date(new Date(sale.date).getTime() + 15 * 24 * 60 * 60 * 1000), 'dd-MMM-yyyy')
-    : '';
+  const total = Number(sale.total) || 0;
+  const paidAmount = Number(sale.amountPaid) || 0;
+  const balance = Math.max(0, total - paidAmount);
+  const isWebSerialAvail = isWebSerialSupported();
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
-        <DialogHeader className="no-print">
-          <DialogTitle className="flex items-center gap-2">
-            <Printer className="h-5 w-5" />
-            Thermal Receipt Print Preview
-          </DialogTitle>
-          <DialogDescription>
-            Preview and confirm black & white thermal print layout before printing.
+      <DialogContent className="sm:max-w-xl max-h-[92vh] flex flex-col p-5">
+        <DialogHeader className="no-print pb-2 border-b">
+          <div className="flex items-center justify-between">
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <Printer className="h-5 w-5 text-primary" />
+              Thermal Receipt Print (3" 80mm & 2" 58mm)
+            </DialogTitle>
+          </div>
+          <DialogDescription className="text-xs">
+            Direct 1-Click thermal printing for Windows POS printers & continuous roll preview.
           </DialogDescription>
         </DialogHeader>
 
-        {/* Paper Size Selector */}
-        <div className="flex items-center gap-3 py-2 border-b no-print">
-          <span className="text-sm font-medium text-muted-foreground">Paper Size:</span>
-          <div className="flex gap-2">
+        {/* Status Message Alert */}
+        {statusMessage && (
+          <div className="py-2 px-3 text-xs rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 border border-emerald-200 flex items-center gap-2">
+            <Check className="h-4 w-4 shrink-0 text-emerald-600" />
+            <span>{statusMessage}</span>
+          </div>
+        )}
+
+        {/* Paper Size & Connection Status Controls */}
+        <div className="flex flex-col gap-2 py-2 border-b no-print">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-muted-foreground">Roll Size:</span>
+              <div className="flex gap-1.5">
+                <Button
+                  type="button"
+                  variant={paperWidth === '80mm' ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-8 text-xs font-medium"
+                  onClick={() => handleSetPaperWidth('80mm')}
+                >
+                  {paperWidth === '80mm' && <Check className="h-3.5 w-3.5 mr-1" />}
+                  80mm (3 Inch Standard)
+                </Button>
+                <Button
+                  type="button"
+                  variant={paperWidth === '58mm' ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-8 text-xs font-medium"
+                  onClick={() => handleSetPaperWidth('58mm')}
+                >
+                  {paperWidth === '58mm' && <Check className="h-3.5 w-3.5 mr-1" />}
+                  58mm (2 Inch Compact)
+                </Button>
+              </div>
+            </div>
+
+            {/* Test Print Link */}
             <Button
               type="button"
-              variant={paperWidth === '58mm' ? 'default' : 'outline'}
+              variant="ghost"
               size="sm"
-              onClick={() => setPaperWidth('58mm')}
+              disabled={isTesting}
+              onClick={handleTestPrint}
+              className="h-8 text-xs text-muted-foreground hover:text-foreground"
             >
-              58mm (2 Inch)
-            </Button>
-            <Button
-              type="button"
-              variant={paperWidth === '80mm' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setPaperWidth('80mm')}
-            >
-              80mm (3 Inch)
+              {isTesting ? (
+                <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5 mr-1 text-primary" />
+              )}
+              Test Strip
             </Button>
           </div>
+
+          {/* USB Direct Thermal Printer Status Bar */}
+          {isWebSerialAvail && (
+            <div
+              className={`flex items-center justify-between px-3 py-1.5 rounded-lg border text-xs ${
+                hasSerialPort
+                  ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-300'
+                  : 'bg-amber-50/70 border-amber-200 text-amber-900 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Usb className="h-4 w-4 shrink-0" />
+                <span className="font-medium">
+                  {hasSerialPort
+                    ? 'Direct USB/Serial Printer: Paired & Ready'
+                    : 'Direct USB Thermal Print: Port not selected'}
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-6 text-[11px] px-2"
+                onClick={handleConnectPort}
+              >
+                {hasSerialPort ? 'Change Port' : 'Pair USB Port'}
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Thermal Print Preview Container */}
-        <div className="flex-1 overflow-y-auto p-4 bg-muted/40 rounded-md flex justify-center no-print">
+        <div className="flex-1 overflow-y-auto p-4 bg-muted/30 rounded-md flex justify-center no-print min-h-[300px]">
           <div
             id="thermal-receipt-preview"
             style={{
               width: paperWidth === '58mm' ? '240px' : '320px',
               fontFamily: "'Courier New', Courier, monospace",
             }}
-            className="bg-white text-black p-4 border border-black shadow-sm text-xs leading-snug select-none"
+            className="bg-white text-black p-4 border border-black shadow-sm text-xs leading-snug select-none rounded-none"
           >
             {/* Receipt Header */}
-            <div className="text-center space-y-1 mb-2">
+            <div className="text-center space-y-0.5 mb-2">
               <h2 className="font-bold text-sm uppercase tracking-wide">
                 {companyProfile?.companyName || 'Win Automobiles'}
               </h2>
@@ -138,7 +308,7 @@ export function ThermalPrintDialog({
 
             {/* Items List */}
             <div className="space-y-1 text-[11px]">
-              {sale.items.map((item, idx) => (
+              {(sale.items || []).map((item, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-1 align-top">
                   <span className="col-span-5 truncate">{item.productName}</span>
                   <span className="col-span-2 text-center">{item.quantity}</span>
@@ -156,15 +326,15 @@ export function ThermalPrintDialog({
             <div className="space-y-1 text-[11px] text-right">
               <div className="flex justify-between">
                 <span>Subtotal:</span>
-                <span>₹{sale.subtotal.toLocaleString()}</span>
+                <span>₹{(sale.subtotal || 0).toLocaleString()}</span>
               </div>
               <div className="flex justify-between">
                 <span>GST:</span>
-                <span>₹{sale.gstAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span>₹{(sale.gstAmount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
               </div>
               <div className="flex justify-between font-bold border-t border-b border-black py-1 my-1 text-xs">
                 <span>TOTAL:</span>
-                <span>₹{sale.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span>₹{(sale.total || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
               </div>
               <div className="flex justify-between text-[11px]">
                 <span>Payment Mode:</span>
@@ -172,197 +342,67 @@ export function ThermalPrintDialog({
               </div>
               <div className="flex justify-between text-[11px]">
                 <span>Payment Status:</span>
-                <span className="font-bold uppercase">{sale.paymentStatus}</span>
+                <span className="font-bold uppercase">{sale.paymentStatus || 'Paid'}</span>
               </div>
+              {paidAmount > 0 && balance > 0.01 && (
+                <>
+                  <div className="flex justify-between text-[11px]">
+                    <span>Amount Paid:</span>
+                    <span>₹{paidAmount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] font-bold">
+                    <span>Balance Due:</span>
+                    <span>₹{balance.toLocaleString()}</span>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="border-t border-dashed border-black my-2" />
 
             {/* Footer */}
-            <div className="text-center space-y-1 mt-2 text-[10px]">
+            <div className="text-center space-y-0.5 mt-2 text-[10px]">
               <p className="font-bold">Thank You for Your Business!</p>
               <p>Please Visit Again</p>
             </div>
           </div>
         </div>
 
-        {/* Printable Only Section (Hidden during normal screen view) */}
-        <div id="thermal-receipt-print-area" className="hidden print:block">
-          <div
-            style={{
-              width: paperWidth === '58mm' ? '58mm' : '80mm',
-              margin: '0 auto',
-              padding: '4px',
-              fontFamily: "'Courier New', Courier, monospace",
-              color: '#000',
-              backgroundColor: '#fff',
-              fontSize: '11px',
-              lineHeight: '1.2',
-            }}
-          >
-            {/* Receipt Header */}
-            <div style={{ textAlign: 'center', marginBottom: '8px' }}>
-              <div style={{ fontSize: '14px', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                {companyProfile?.companyName || 'Win Automobiles'}
-              </div>
-              {companyProfile?.address && (
-                <div style={{ fontSize: '10px', whiteSpace: 'pre-line' }}>{companyProfile.address}</div>
-              )}
-              {companyProfile?.contact && <div style={{ fontSize: '10px' }}>Ph: {companyProfile.contact}</div>}
-              {companyProfile?.gstNumber && (
-                <div style={{ fontSize: '10px' }}>GSTIN: {companyProfile.gstNumber}</div>
-              )}
-            </div>
-
-            <div
-              style={{
-                borderTop: '1px solid #000',
-                borderBottom: '1px solid #000',
-                padding: '3px 0',
-                margin: '4px 0',
-                textAlign: 'center',
-                fontWeight: 'bold',
-              }}
-            >
-              TAX INVOICE
-            </div>
-
-            <div style={{ fontSize: '10px', marginBottom: '6px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Invoice #:</span>
-                <span style={{ fontWeight: 'bold' }}>{sale.invoiceNumber}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Date:</span>
-                <span>{formattedDate}</span>
-              </div>
-              {sale.customerName && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Customer:</span>
-                  <span style={{ fontWeight: 'bold' }}>{sale.customerName}</span>
-                </div>
-              )}
-              {sale.customerMobile && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Phone:</span>
-                  <span>{sale.customerMobile}</span>
-                </div>
-              )}
-            </div>
-
-            <div style={{ borderTop: '1px dashed #000', margin: '4px 0' }} />
-
-            <div
-              style={{
-                fontWeight: 'bold',
-                borderBottom: '1px solid #000',
-                paddingBottom: '2px',
-                marginBottom: '4px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: '10px',
-              }}
-            >
-              <span style={{ width: '40%' }}>Item</span>
-              <span style={{ width: '15%', textAlign: 'center' }}>Qty</span>
-              <span style={{ width: '20%', textAlign: 'right' }}>Price</span>
-              <span style={{ width: '25%', textAlign: 'right' }}>Amt</span>
-            </div>
-
-            <div style={{ fontSize: '10px' }}>
-              {sale.items.map((item, idx) => (
-                <div
-                  key={idx}
-                  style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}
-                >
-                  <span style={{ width: '40%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {item.productName}
-                  </span>
-                  <span style={{ width: '15%', textAlign: 'center' }}>{item.quantity}</span>
-                  <span style={{ width: '20%', textAlign: 'right' }}>₹{item.price}</span>
-                  <span style={{ width: '25%', textAlign: 'right', fontWeight: 'bold' }}>
-                    ₹{item.total.toLocaleString()}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ borderTop: '1px dashed #000', margin: '6px 0' }} />
-
-            <div style={{ fontSize: '10px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Subtotal:</span>
-                <span>₹{sale.subtotal.toLocaleString()}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>GST:</span>
-                <span>₹{sale.gstAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontWeight: 'bold',
-                  fontSize: '12px',
-                  borderTop: '1px solid #000',
-                  borderBottom: '1px solid #000',
-                  padding: '3px 0',
-                  margin: '4px 0',
-                }}
-              >
-                <span>TOTAL:</span>
-                <span>₹{sale.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Mode:</span>
-                <span>{sale.paymentMode || 'Cash'}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Status:</span>
-                <span style={{ fontWeight: 'bold' }}>{sale.paymentStatus}</span>
-              </div>
-            </div>
-
-            <div style={{ borderTop: '1px dashed #000', margin: '6px 0' }} />
-
-            <div style={{ textAlign: 'center', fontSize: '9px', marginTop: '6px' }}>
-              <div style={{ fontWeight: 'bold' }}>Thank You for Your Business!</div>
-              <div>Please Visit Again</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Global Print Stylesheet for Thermal Printer */}
-        <style jsx global>{`
-          @media print {
-            body * {
-              visibility: hidden !important;
-            }
-            #thermal-receipt-print-area,
-            #thermal-receipt-print-area * {
-              visibility: visible !important;
-            }
-            #thermal-receipt-print-area {
-              position: absolute !important;
-              left: 0 !important;
-              top: 0 !important;
-              width: 100% !important;
-            }
-            @page {
-              size: ${paperWidth === '58mm' ? '58mm auto' : '80mm auto'};
-              margin: 0mm;
-            }
-          }
-        `}</style>
-
-        <DialogFooter className="sm:justify-between border-t pt-3 no-print">
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+        {/* Dialog Actions */}
+        <DialogFooter className="flex flex-row items-center justify-between sm:justify-between border-t pt-3 no-print gap-2">
+          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button onClick={handlePrint} className="gap-2">
-            <Printer className="h-4 w-4" />
-            Confirm & Print
-          </Button>
+
+          <div className="flex items-center gap-2">
+            {/* System Print Dialog (Preview with exact 80mm roll, Never A4) */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleSystemPrint}
+              className="gap-1.5"
+            >
+              <Printer className="h-4 w-4" />
+              System Print ({paperWidth})
+            </Button>
+
+            {/* Direct Thermal Print (Instant USB / ESC-POS) */}
+            <Button
+              type="button"
+              onClick={handleDirectPrint}
+              disabled={isDirectPrinting}
+              className="gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+              size="sm"
+            >
+              {isDirectPrinting ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Usb className="h-4 w-4" />
+              )}
+              {isDirectPrinting ? 'Printing…' : 'Direct Print'}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

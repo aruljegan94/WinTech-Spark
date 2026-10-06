@@ -38,6 +38,7 @@ import {
   FileText,
   FileCheck,
   Check,
+  BellRing,
 } from 'lucide-react';
 import { ShareInvoiceDialog } from '../_components/share-invoice-dialog';
 import { ThermalPrintDialog } from '../_components/thermal-print-dialog';
@@ -170,6 +171,50 @@ export default function SaleDetailsPage() {
       text += `Outstanding Balance: *₹${balanceDue.toLocaleString()}*\n`;
     }
     text += `\nThank you for choosing ${compName}!`;
+
+    let phone = sale.customerMobile ? sale.customerMobile.replace(/\D/g, '') : '';
+    if (phone && phone.length === 10) {
+      phone = '91' + phone;
+    }
+
+    const url = phone
+      ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+      : `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  };
+
+  // WhatsApp Payment Reminder with UPI details
+  const handleWhatsAppReminder = () => {
+    if (!sale) return;
+    const compName = companyProfile?.companyName || 'WinTech-Spark';
+    let text = `🔔 *PAYMENT REMINDER - ${compName}*\n\n`;
+    text += `Dear *${sale.customerName || 'Valued Customer'}*,\n`;
+    text += `This is a gentle reminder regarding pending payment for:\n`;
+    text += `📄 *Invoice #:* ${sale.invoiceNumber}\n`;
+    text += `📅 *Bill Date:* ${format(new Date(sale.date), 'dd-MMM-yyyy')}\n`;
+    text += `💵 *Bill Amount:* ₹${sale.total.toLocaleString('en-IN')}\n`;
+    const paid = sale.amountPaid ?? 0;
+    if (paid > 0) {
+      text += `✅ *Paid So Far:* ₹${paid.toLocaleString('en-IN')}\n`;
+    }
+    text += `⚠️ *Outstanding Due: ₹${balanceDue.toLocaleString('en-IN')}*\n\n`;
+
+    if (companyProfile?.upiId) {
+      text += `📲 *Pay Directly via UPI:*\n`;
+      text += `UPI ID: \`${companyProfile.upiId}\`\n`;
+      text += `Pay Link: ${upiUri}\n\n`;
+    }
+
+    if (companyProfile?.bankName && companyProfile?.bankAccountNumber) {
+      text += `🏦 *Bank Transfer:*\n`;
+      text += `Bank: ${companyProfile.bankName}\n`;
+      text += `A/C No: ${companyProfile.bankAccountNumber}\n`;
+      if (companyProfile.bankIfsc) text += `IFSC: ${companyProfile.bankIfsc}\n`;
+      text += `\n`;
+    }
+
+    text += `Please let us know once paid. If already completed, kindly disregard this message.\n`;
+    text += `Thank you!\n— *${compName}*`;
 
     let phone = sale.customerMobile ? sale.customerMobile.replace(/\D/g, '') : '';
     if (phone && phone.length === 10) {
@@ -335,6 +380,19 @@ export default function SaleDetailsPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* WhatsApp Reminder if payment pending */}
+            {balanceDue > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleWhatsAppReminder}
+                className="gap-1.5 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-950/40 font-semibold"
+              >
+                <BellRing className="h-4 w-4 text-amber-600" />
+                WhatsApp Reminder
+              </Button>
+            )}
+
             {/* WhatsApp Share */}
             <Button
               variant="outline"

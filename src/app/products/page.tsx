@@ -41,7 +41,9 @@ import {
   Pencil,
   Trash2,
   Tag,
+  MessageSquare,
 } from 'lucide-react';
+import { format } from 'date-fns';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -195,6 +197,34 @@ export default function ProductsPage() {
     setProductToDelete(null);
   };
 
+  // WhatsApp Purchase Reorder List Generator
+  const handleWhatsAppReorderList = () => {
+    if (!rawProducts) return;
+    const needed = rawProducts.filter((p) => p.stockQuantity < 10);
+    if (needed.length === 0) {
+      toast({ title: 'Stock Healthy', description: 'All items have 10+ units in stock.' });
+      return;
+    }
+
+    const dateStr = format(new Date(), 'dd-MMM-yyyy');
+    let text = `📦 *PURCHASE REORDER LIST*\n`;
+    text += `Date: ${dateStr}\n`;
+    text += `Store: WinTech-Spark Catalog\n\n`;
+    text += `Please supply the following restock items:\n`;
+
+    needed.forEach((p, idx) => {
+      const suggest = p.stockQuantity <= 0 ? 25 : Math.max(10, 20 - p.stockQuantity);
+      text += `${idx + 1}. *${p.productName}*\n`;
+      text += `   • Current Stock: ${p.stockQuantity}\n`;
+      text += `   • Order Qty: *${suggest} units*\n`;
+      if (p.barcode) text += `   • Barcode/SKU: ${p.barcode}\n`;
+    });
+
+    text += `\nPlease send invoice estimate and delivery ETA.\nThank you!`;
+    const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  };
+
   return (
     <>
       <PageHeader
@@ -219,7 +249,12 @@ export default function ProductsPage() {
 
       {/* ─── Top KPI Metric Cards ────────────────────────────────────────── */}
       <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4 mb-2">
-        <Card className="bg-gradient-to-br from-indigo-500/10 via-card to-indigo-500/5 border-indigo-500/30 shadow-xs">
+        <Card
+          onClick={() => setStockFilter('all')}
+          className={`bg-gradient-to-br from-indigo-500/10 via-card to-indigo-500/5 border-indigo-500/30 shadow-xs cursor-pointer transition hover:border-indigo-500 ${
+            stockFilter === 'all' ? 'ring-2 ring-indigo-500/40' : ''
+          }`}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-3 py-2">
             <CardTitle className="text-xs font-semibold text-muted-foreground">Total Catalog</CardTitle>
             <div className="p-1 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
@@ -237,7 +272,12 @@ export default function ProductsPage() {
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-amber-500/10 via-card to-amber-500/5 border-amber-500/30 shadow-xs">
+        <Card
+          onClick={() => setStockFilter(stockFilter === 'low_stock' ? 'all' : 'low_stock')}
+          className={`bg-gradient-to-br from-amber-500/10 via-card to-amber-500/5 border-amber-500/30 shadow-xs cursor-pointer transition hover:border-amber-500 ${
+            stockFilter === 'low_stock' ? 'ring-2 ring-amber-500/60' : ''
+          }`}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-3 py-2">
             <CardTitle className="text-xs font-semibold text-muted-foreground">Low Stock (&lt;10)</CardTitle>
             <div className="p-1 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">
@@ -255,7 +295,12 @@ export default function ProductsPage() {
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-rose-500/10 via-card to-rose-500/5 border-rose-500/30 shadow-xs">
+        <Card
+          onClick={() => setStockFilter(stockFilter === 'out_of_stock' ? 'all' : 'out_of_stock')}
+          className={`bg-gradient-to-br from-rose-500/10 via-card to-rose-500/5 border-rose-500/30 shadow-xs cursor-pointer transition hover:border-rose-500 ${
+            stockFilter === 'out_of_stock' ? 'ring-2 ring-rose-500/60' : ''
+          }`}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-3 py-2">
             <CardTitle className="text-xs font-semibold text-muted-foreground">Out of Stock</CardTitle>
             <div className="p-1 rounded bg-rose-500/15 text-rose-600 dark:text-rose-400">
@@ -291,6 +336,58 @@ export default function ProductsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ─── Low Stock & Auto-Reorder Alert Strip ─────────────────────── */}
+      {(lowStockCount > 0 || outOfStockCount > 0) && (
+        <div className="mb-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 dark:bg-amber-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-foreground flex items-center gap-2">
+                <span>Stock Restock Alert: {lowStockCount + outOfStockCount} items need attention</span>
+                <Badge variant="outline" className="border-amber-500/40 text-amber-600 text-xs">
+                  {lowStockCount} Low • {outOfStockCount} Out
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Automatic re-order calculation ready for vendors & purchase orders.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setStockFilter(stockFilter === 'low_stock' ? 'all' : 'low_stock')}
+              className="text-xs h-8 border-amber-500/30 hover:bg-amber-500/15"
+            >
+              {stockFilter === 'low_stock' ? 'Clear Filter' : 'Filter Low Stock'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleWhatsAppReorderList}
+              className="text-xs h-8 gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10"
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              Reorder on WhatsApp
+            </Button>
+            <Button
+              size="sm"
+              asChild
+              className="text-xs h-8 gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+            >
+              <Link href="/purchases/new">
+                <PlusCircle className="h-3.5 w-3.5" />
+                Create PO
+              </Link>
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* ─── Main Product Table Card ─────────────────────────────────────── */}
       <Card className="shadow-sm">

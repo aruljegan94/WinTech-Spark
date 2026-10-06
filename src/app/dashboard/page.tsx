@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useCollection, useFirestore, useMemoFirebase } from '@/firebase';
 import { collection } from 'firebase/firestore';
 import type { Product, Sale, Expense, Vendor, Purchase } from '@/lib/types';
@@ -15,7 +15,7 @@ import {
   ArrowUpRight, Receipt, Clock, CircleDollarSign,
   Boxes, BadgePercent, BellRing, AlertTriangle,
   CalendarClock, FileText, Building2, Wallet, CheckCircle2,
-  ChevronRight,
+  ChevronRight, Eye, EyeOff, ShieldCheck, Scale,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -56,6 +56,8 @@ export default function DashboardPage() {
 
   const isLoading = l1 || l2 || l3 || l4 || l5;
 
+  const [hideConfidentialNumbers, setHideConfidentialNumbers] = useState(false);
+
   const stats = useMemo(() => {
     const totalSalesToday = sales?.filter(s => isToday(new Date(s.date))).reduce((a, s) => a + s.total, 0) ?? 0;
     const monthlySales    = sales?.filter(s => isThisMonth(new Date(s.date))).reduce((a, s) => a + s.total, 0) ?? 0;
@@ -73,12 +75,42 @@ export default function DashboardPage() {
     const outOfStock = products?.filter(p => p.stockQuantity === 0).length ?? 0;
     const netMargin  = Math.max(0, monthlySales - totalExpenses);
 
+    // ── Owner Business Intelligence, COGS & Taxes ──────────────
+    const productCostMap = new Map<string, number>();
+    products?.forEach(p => {
+      productCostMap.set(p.id, p.purchasePrice || 0);
+      if (p.productName) {
+        productCostMap.set(p.productName.toLowerCase().trim(), p.purchasePrice || 0);
+      }
+    });
+
+    let monthlyCogs = 0;
+    let monthlyOutputGst = 0;
+    mthList.forEach(s => {
+      monthlyOutputGst += s.gstAmount || 0;
+      s.items?.forEach(item => {
+        const cost = productCostMap.get(item.productId) ?? productCostMap.get(item.productName?.toLowerCase().trim()) ?? ((item.price || 0) * 0.7);
+        monthlyCogs += cost * (item.quantity || 1);
+      });
+    });
+
+    const mthPurchases = purchases?.filter(p => isThisMonth(new Date(p.date))) ?? [];
+    const monthlyInputGst = mthPurchases.reduce((acc, p) => acc + (p.totalAmount * 0.18 / 1.18), 0);
+    const netGstPayable = Math.max(0, monthlyOutputGst - monthlyInputGst);
+
+    const grossProfit = monthlySales - monthlyCogs;
+    const grossMarginPct = monthlySales > 0 ? (grossProfit / monthlySales) * 100 : 0;
+    const netProfit = grossProfit - totalExpenses;
+    const netMarginPct = monthlySales > 0 ? (netProfit / monthlySales) * 100 : 0;
+
     return {
       totalSalesToday, monthlySales, totalExpenses, stockValue,
       paidCount, pendingCount, pendingValue, recentSales,
       lowStock, outOfStock, netMargin, mthCount: mthList.length,
+      monthlyCogs, grossProfit, grossMarginPct, netProfit, netMarginPct,
+      monthlyOutputGst, monthlyInputGst, netGstPayable,
     };
-  }, [sales, products, expenses]);
+  }, [sales, products, expenses, purchases]);
 
   const alerts = useMemo(() => {
     const now  = new Date();
@@ -119,6 +151,11 @@ export default function DashboardPage() {
     critical: (d: number) => d < 0 ? 'Overdue!' : d === 0 ? 'Today!' : `${d}d left`,
     warning:  (d: number) => `${d}d left`,
     info:     (d: number) => `${d}d`,
+  };
+
+  const fmtPrivate = (val: number) => {
+    if (hideConfidentialNumbers) return '₹ ••••••';
+    return `₹${Math.round(val).toLocaleString('en-IN')}`;
   };
 
   return (
@@ -249,6 +286,120 @@ export default function DashboardPage() {
             <p className="text-xs font-medium text-muted-foreground">Invoices This Month</p>
             {isLoading ? <Skeleton className="h-5 w-16 mt-1" /> :
               <p className="text-base font-bold text-foreground font-mono">{stats.mthCount} bills</p>}
+          </div>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════
+          ROW 2.5 — OWNER TOOLS & FINANCIAL INTELLIGENCE (P&L + TAX)
+         ══════════════════════════════════════════════ */}
+      <div className="rounded-xl border border-border/80 bg-gradient-to-r from-card via-card to-primary/5 p-4 shadow-sm flex flex-col gap-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-lg bg-indigo-500/15 text-indigo-500 flex items-center justify-center font-bold">
+              <ShieldCheck className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-foreground">
+                  Owner P&L & Tax Intelligence
+                </span>
+                <Badge variant="outline" className="text-[10px] font-bold py-0 h-4 border-amber-500/40 text-amber-600 dark:text-amber-400 bg-amber-500/10">
+                  CONFIDENTIAL
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Real-time gross margin, cost of goods (COGS) and GST balance
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setHideConfidentialNumbers(!hideConfidentialNumbers)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-muted hover:bg-muted/80 text-foreground transition-colors border border-border/60"
+            title="Toggle confidential numbers when customers are looking at the counter screen"
+          >
+            {hideConfidentialNumbers ? (
+              <>
+                <EyeOff className="h-3.5 w-3.5 text-amber-500" />
+                <span>Hidden</span>
+              </>
+            ) : (
+              <>
+                <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>Counter Privacy</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {/* Gross Profit */}
+          <div className="rounded-lg bg-muted/30 border border-border/60 p-3 flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase">Gross Profit</span>
+              <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded ${stats.grossProfit >= 0 ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/15 text-rose-600'}`}>
+                {stats.grossMarginPct.toFixed(1)}% margin
+              </span>
+            </div>
+            <div className={`text-xl font-extrabold font-mono ${stats.grossProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600'}`}>
+              {fmtPrivate(stats.grossProfit)}
+            </div>
+            <span className="text-[10px] text-muted-foreground">Sales minus COGS</span>
+          </div>
+
+          {/* Net Profit (EBITDA) */}
+          <div className="rounded-lg bg-muted/30 border border-border/60 p-3 flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase">Net Profit</span>
+              <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded ${stats.netProfit >= 0 ? 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400' : 'bg-rose-500/15 text-rose-600'}`}>
+                {stats.netMarginPct.toFixed(1)}% net
+              </span>
+            </div>
+            <div className={`text-xl font-extrabold font-mono ${stats.netProfit >= 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-rose-600'}`}>
+              {fmtPrivate(stats.netProfit)}
+            </div>
+            <span className="text-[10px] text-muted-foreground">Post operating expenses</span>
+          </div>
+
+          {/* COGS (Cost of goods) */}
+          <div className="rounded-lg bg-muted/30 border border-border/60 p-3 flex flex-col gap-1">
+            <span className="text-[11px] font-bold text-muted-foreground uppercase">Cost of Goods (COGS)</span>
+            <div className="text-xl font-extrabold font-mono text-amber-600 dark:text-amber-400">
+              {fmtPrivate(stats.monthlyCogs)}
+            </div>
+            <span className="text-[10px] text-muted-foreground">Procurement inventory value</span>
+          </div>
+
+          {/* Operating Spend */}
+          <div className="rounded-lg bg-muted/30 border border-border/60 p-3 flex flex-col gap-1">
+            <span className="text-[11px] font-bold text-muted-foreground uppercase">Operating Expenses</span>
+            <div className="text-xl font-extrabold font-mono text-rose-600 dark:text-rose-400">
+              {fmtPrivate(stats.totalExpenses)}
+            </div>
+            <span className="text-[10px] text-muted-foreground">Store & overhead costs</span>
+          </div>
+        </div>
+
+        {/* GST Tax Breakdown Strip */}
+        <div className="rounded-lg bg-muted/40 border border-border/60 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Scale className="h-4 w-4 text-cyan-500" />
+            <span className="text-xs font-bold text-foreground">GST Estimate (MTD):</span>
+            <span className="text-xs text-muted-foreground">
+              Collected (Output): <strong className="text-foreground font-mono">{fmtPrivate(stats.monthlyOutputGst)}</strong>
+              {' · '}
+              ITC (Input Credit): <strong className="text-foreground font-mono">{fmtPrivate(stats.monthlyInputGst)}</strong>
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-muted-foreground">Estimated Tax Payable:</span>
+            <Badge className="bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/30 text-xs font-mono font-bold">
+              {fmtPrivate(stats.netGstPayable)}
+            </Badge>
+            <Link href="/reports" className="text-xs text-primary hover:underline font-medium ml-1">
+              Filing Reports &rarr;
+            </Link>
           </div>
         </div>
       </div>
