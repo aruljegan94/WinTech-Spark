@@ -33,6 +33,8 @@ import {
   Scan,
   PackageCheck,
   PackagePlus,
+  AlertCircle,
+  ExternalLink,
 } from 'lucide-react';
 import type { Product } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
@@ -58,6 +60,7 @@ export function PurchaseOcrModal({
   const [step, setStep] = useState<'upload' | 'analyzing' | 'verify'>('upload');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [ocrError, setOcrError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>('');
 
   const [supplierName, setSupplierName] = useState('');
@@ -118,10 +121,12 @@ export function PurchaseOcrModal({
         });
       } catch (error: any) {
         console.error('OCR Parsing Error:', error);
+        const msg = error.message || 'Could not parse purchase invoice. Please check the image.';
+        setOcrError(msg);
         toast({
           variant: 'destructive',
           title: 'OCR Analysis Failed',
-          description: error.message || 'Could not parse purchase invoice. Please check the image.',
+          description: msg,
         });
         setStep('upload');
       } finally {
@@ -292,6 +297,7 @@ export function PurchaseOcrModal({
     setSupplierName('');
     setInvoiceNo('');
     setItems([]);
+    setOcrError(null);
   };
 
   return (
@@ -316,6 +322,48 @@ export function PurchaseOcrModal({
         {/* STEP 1: UPLOAD DROPZONE */}
         {step === 'upload' && (
           <div className="py-6 space-y-4">
+            {ocrError && (
+              <div className="p-3.5 rounded-xl border border-destructive/30 bg-destructive/10 text-xs text-destructive space-y-2">
+                <div className="flex items-center gap-2 font-semibold">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>OCR Service Notice</span>
+                </div>
+                <p className="leading-relaxed">{ocrError}</p>
+                <div className="flex items-center gap-2 pt-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setStep('verify');
+                      setItems([
+                        {
+                          productName: '',
+                          quantity: 1,
+                          purchasePrice: 0,
+                          gstPercentage: 18,
+                          amountWithGst: 0,
+                        },
+                      ]);
+                    }}
+                    className="h-7 text-xs font-semibold"
+                  >
+                    Enter Bill Details Manually
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => window.open('https://aistudio.google.com/app/apikey', '_blank')}
+                    className="h-7 text-xs gap-1 text-primary hover:text-primary"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Get Free Gemini API Key
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div
               onClick={() => fileInputRef.current?.click()}
               className="border-2 border-dashed border-primary/40 rounded-xl p-8 text-center bg-primary/5 hover:bg-primary/10 transition-colors cursor-pointer space-y-3"

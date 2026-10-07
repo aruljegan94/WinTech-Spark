@@ -110,8 +110,8 @@ export default function SalesPage() {
         if (s.paymentStatus === 'Pending') {
           return sum + s.total;
         }
-        // For partial, it's the remaining amount
-        return sum + (s.total - (s.amountPaid || 0));
+        // For partial, deduct already paid and discount given
+        return sum + Math.max(0, s.total - (s.amountPaid || 0) - (s.discount || 0));
       }, 0);
 
     return {
@@ -228,6 +228,11 @@ export default function SalesPage() {
         const productRefs = (saleData.items || []).map(item => doc(firestore, 'products', item.productId));
         const productDocs = await Promise.all(productRefs.map(ref => transaction.get(ref)));
 
+        const targetCustomerId = saleData.customerId || saleToDelete.customerId;
+        const customerRef = targetCustomerId ? doc(firestore, 'customers', targetCustomerId) : null;
+        const customerDoc = customerRef ? await transaction.get(customerRef) : null;
+
+        // --- WRITE PHASE ---
         productDocs.forEach((productDoc, index) => {
           if (productDoc.exists()) {
             const currentStock = productDoc.data().stockQuantity;
@@ -236,6 +241,17 @@ export default function SalesPage() {
             transaction.update(productRefs[index], { stockQuantity: newStock });
           }
         });
+
+        if (customerRef && customerDoc && customerDoc.exists()) {
+          const cData = customerDoc.data();
+          const unpaidOnSale = Math.max(0, saleData.total - (saleData.amountPaid ?? (saleData.paymentStatus === 'Paid' ? saleData.total : 0)));
+          transaction.update(customerRef, {
+            totalSpent: Math.max(0, (cData.totalSpent || 0) - saleData.total),
+            totalInvoices: Math.max(0, (cData.totalInvoices || 0) - 1),
+            pendingDue: Math.max(0, (cData.pendingDue || 0) - unpaidOnSale),
+            updatedAt: new Date().toISOString(),
+          });
+        }
         
         transaction.delete(saleRef);
       });
@@ -454,7 +470,8 @@ export default function SalesPage() {
               {isLoading && renderSkeleton()}
               {!isLoading && sales?.map((sale) => {
                 const paid = sale.amountPaid ?? (sale.paymentStatus === 'Paid' ? sale.total : 0);
-                const due = Math.max(0, sale.total - paid);
+                const disc = sale.discount || 0;
+                const due = Math.max(0, Math.round((sale.total - paid - disc) * 100) / 100);
                 return (
                   <TableRow key={sale.id} className="hover:bg-muted/40 transition-colors">
                     <TableCell className="font-semibold text-xs whitespace-nowrap">
@@ -501,6 +518,11 @@ export default function SalesPage() {
                         >
                           {sale.paymentStatus}
                         </Badge>
+                        {disc > 0 && (
+                          <Badge variant="outline" className="text-[9px] h-4 px-1 text-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200">
+                            Disc: ₹{disc.toLocaleString()}
+                          </Badge>
+                        )}
                         {sale.paymentStatus !== 'Paid' && due > 0 && (
                           <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
                             Due: ₹{due.toLocaleString()}

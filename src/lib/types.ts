@@ -118,6 +118,7 @@ export type Sale = {
   paymentStatus: 'Paid' | 'Partial' | 'Pending';
   paymentMode: 'Cash' | 'UPI' | 'Bank Transfer';
   amountPaid?: number;
+  discount?: number;
   status: 'Paid' | 'Pending' | 'Partial';
   dueDate?: string;
   notes?: string;
@@ -152,6 +153,7 @@ export type CompanyProfile = {
   isDefault?: boolean;
   invoicePrefix?: string;
   invoiceSuffix?: string;
+  autoResetMonthly?: boolean;
   email?: string;
   bankName?: string;
   bankAccountNumber?: string;
@@ -263,3 +265,44 @@ export const AnalyzeSalesOutputSchema = z.object({
   report: z.string().describe('A detailed, narrative report summarizing the sales and stock analysis. Provide actionable insights.'),
 });
 export type AnalyzeSalesOutput = z.infer<typeof AnalyzeSalesOutputSchema>;
+
+export type SettlementChecklistRecord = {
+  id: string;
+  type: 'daily' | 'weekly' | 'monthly';
+  periodKey: string;
+  verifiedAt: string;
+  verifiedBy?: string;
+  status: 'Reconciled' | 'Discrepancy' | 'Draft';
+  systemCash: number;
+  physicalCash: number;
+  cashVariance: number;
+  systemUpi: number;
+  actualUpi: number;
+  upiVariance: number;
+  totalExpenses: number;
+  pendingReceivables: number;
+  checks: Record<string, boolean>;
+  notes?: string;
+  lackingNotes?: string;
+  updatedAt: string;
+};
+
+export type MechanicCommissionRecord = {
+  id: string;
+  date: string;
+  mechanicName: string;
+  mechanicPhone?: string;
+  mechanicId?: string;
+  invoiceNumber?: string;
+  saleId?: string;
+  billAmount: number;
+  commissionRate: number;
+  commissionAmount: number;
+  bonusAmount?: number;
+  deductions?: number;
+  netPayable: number;
+  paymentStatus: 'Paid' | 'Unpaid';
+  paymentMode?: 'Cash' | 'UPI';
+  notes?: string;
+  createdAt: string;
+};

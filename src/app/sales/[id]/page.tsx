@@ -86,7 +86,8 @@ export default function SaleDetailsPage() {
 
   const balanceDue = useMemo(() => {
     if (!sale) return 0;
-    return Math.max(0, Math.round((sale.total - currentPaid) * 100) / 100);
+    const disc = sale.discount || 0;
+    return Math.max(0, Math.round((sale.total - currentPaid - disc) * 100) / 100);
   }, [sale, currentPaid]);
 
   const getStatusBadge = (status: Sale['paymentStatus']) => {
@@ -715,6 +716,12 @@ export default function SaleDetailsPage() {
                   <span>Amount Received / Paid:</span>
                   <span className="font-mono">₹{currentPaid.toFixed(2)}</span>
                 </div>
+                {(sale.discount || 0) > 0 && (
+                  <div className="flex justify-between text-indigo-700 font-semibold">
+                    <span>Bargain / Settlement Discount:</span>
+                    <span className="font-mono">₹{(sale.discount || 0).toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-amber-700 font-bold text-xs">
                   <span>Balance Due / Outstanding:</span>
                   <span className="font-mono">₹{balanceDue.toFixed(2)}</span>
@@ -729,12 +736,18 @@ export default function SaleDetailsPage() {
               <div className="font-bold text-slate-800 uppercase tracking-wider text-[11px] mb-1">
                 Terms & Conditions:
               </div>
-              <ol className="list-decimal pl-3 space-y-0.5 text-slate-600">
-                <li>Goods once sold will not be taken back or exchanged.</li>
-                <li>Interest @ 18% p.a. will be charged if bill is not paid on due date.</li>
-                <li>All disputes are subject to local jurisdiction only.</li>
-                <li>This is a computer generated tax invoice and requires no physical signature.</li>
-              </ol>
+              {companyProfile?.termsAndConditions ? (
+                <div className="whitespace-pre-line text-slate-600 leading-relaxed pl-1">
+                  {companyProfile.termsAndConditions}
+                </div>
+              ) : (
+                <ol className="list-decimal pl-3 space-y-0.5 text-slate-600">
+                  <li>Goods once sold will not be taken back or exchanged.</li>
+                  <li>Interest @ 18% p.a. will be charged if bill is not paid on due date.</li>
+                  <li>All disputes are subject to local jurisdiction only.</li>
+                  <li>This is a computer generated tax invoice and requires no physical signature.</li>
+                </ol>
+              )}
             </div>
 
             <div className="flex flex-col justify-between items-end text-right">

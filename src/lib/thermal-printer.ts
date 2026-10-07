@@ -264,9 +264,14 @@ export function buildEscPosReceipt(
 
   const totalAmt = Number(sale.total) || 0;
   const paidAmt = Number(sale.amountPaid) || 0;
-  if (paidAmt > 0 && paidAmt < totalAmt) {
+  const discAmt = Number(sale.discount) || 0;
+  if (discAmt > 0) {
+    printRow('Discount:', `Rs. ${fmtCurrency(discAmt)}`);
+  }
+  const balAmt = Math.max(0, totalAmt - paidAmt - discAmt);
+  if (paidAmt > 0 && balAmt > 0.01) {
     printRow('Paid:', `Rs. ${fmtCurrency(paidAmt)}`);
-    printRow('Balance Due:', `Rs. ${fmtCurrency(totalAmt - paidAmt)}`);
+    printRow('Balance Due:', `Rs. ${fmtCurrency(balAmt)}`);
   }
 
   addLine(divider);
@@ -440,7 +445,8 @@ export function printReceiptViaIframe(
 
   const total = Number(sale.total) || 0;
   const paidAmount = Number(sale.amountPaid) || 0;
-  const balance = Math.max(0, total - paidAmount);
+  const discountAmount = Number(sale.discount) || 0;
+  const balance = Math.max(0, total - paidAmount - discountAmount);
 
   const html = `<!DOCTYPE html>
 <html>
@@ -579,6 +585,13 @@ export function printReceiptViaIframe(
 
     <div class="row"><span>Payment Mode:</span><span>${sale.paymentMode || 'Cash'}</span></div>
     <div class="row"><span>Payment Status:</span><span class="bold">${(sale.paymentStatus || 'Paid').toUpperCase()}</span></div>
+    ${
+      discountAmount > 0
+        ? `
+      <div class="row"><span>Discount / Concession:</span><span>Rs. ${fmtCurrency(discountAmount)}</span></div>
+    `
+        : ''
+    }
     ${
       paidAmount > 0 && balance > 0.01
         ? `

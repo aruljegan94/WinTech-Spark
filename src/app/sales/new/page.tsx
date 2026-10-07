@@ -45,6 +45,8 @@ import {
   Plus,
   Phone,
   MapPin,
+  RotateCcw,
+  Loader2,
 } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
 import {
@@ -56,6 +58,19 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -65,7 +80,6 @@ import {
 import { PageHeader } from '@/components/page-header';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
@@ -73,6 +87,7 @@ import { format } from 'date-fns';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { formatInvoiceNumber, calculateNextSequence, getCurrentMonthKey } from '@/lib/invoice-number';
 import { z } from 'zod';
 
 const saleItemSchema = z.object({
@@ -106,6 +121,7 @@ export default function NewInvoicePage() {
   const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Partial' | 'Pending'>('Paid');
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'UPI' | 'Bank Transfer'>('Cash');
   const [amountPaid, setAmountPaid] = useState<number>(0);
+  const [discount, setDiscount] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   
@@ -117,6 +133,9 @@ export default function NewInvoicePage() {
 
   const [popoverPrefix, setPopoverPrefix] = useState('');
   const [popoverSuffix, setPopoverSuffix] = useState('');
+  const [popoverAutoReset, setPopoverAutoReset] = useState(false);
+  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [isResettingCounter, setIsResettingCounter] = useState(false);
 
   const productsQuery = useMemoFirebase(
     () => (firestore ? collection(firestore, 'products') : null),
@@ -143,7 +162,7 @@ export default function NewInvoicePage() {
     () => (firestore ? doc(firestore, 'counters', 'sales') : null),
     [firestore]
   );
-  const { data: salesCounter } = useDoc<{currentNumber: number}>(salesCounterRef);
+  const { data: salesCounter } = useDoc<{ currentNumber: number; lastResetMonth?: string }>(salesCounterRef);
 
   // Check URL query parameters for customerId (e.g. redirected from Customers page)
   useEffect(() => {
@@ -242,16 +261,53 @@ export default function NewInvoicePage() {
 
   useEffect(() => {
     if (defaultProfile) {
-        setPopoverPrefix(defaultProfile.invoicePrefix || 'INV-');
-        setPopoverSuffix(defaultProfile.invoiceSuffix || '');
+      setPopoverPrefix(defaultProfile.invoicePrefix || 'INV-');
+      setPopoverSuffix(defaultProfile.invoiceSuffix || '');
+      setPopoverAutoReset(!!defaultProfile.autoResetMonthly);
     }
   }, [defaultProfile]);
   
+  const autoResetMonthly = popoverAutoReset || (defaultProfile?.autoResetMonthly ?? false);
+
+  const nextSequenceNumber = useMemo(() => {
+    return calculateNextSequence(salesCounter, autoResetMonthly, invoiceDate);
+  }, [salesCounter, autoResetMonthly, invoiceDate]);
+
   const nextInvoiceNumber = useMemo(() => {
-    const nextNumber = (salesCounter?.currentNumber || 0) + 1;
-    const formattedCount = String(nextNumber).padStart(3, '0');
-    return `${popoverPrefix}${formattedCount}${popoverSuffix}`;
-  }, [salesCounter, popoverPrefix, popoverSuffix]);
+    return formatInvoiceNumber({
+      prefix: popoverPrefix,
+      suffix: popoverSuffix,
+      sequenceNumber: nextSequenceNumber,
+      date: invoiceDate,
+    });
+  }, [popoverPrefix, popoverSuffix, nextSequenceNumber, invoiceDate]);
+
+  const handleResetCounter = async () => {
+    if (!firestore) return;
+    setIsResettingCounter(true);
+    try {
+      const counterRef = doc(firestore, 'counters', 'sales');
+      await setDoc(counterRef, {
+        currentNumber: 0,
+        lastResetMonth: getCurrentMonthKey(invoiceDate),
+        resetAt: new Date().toISOString(),
+      }, { merge: true });
+
+      toast({
+        title: 'Invoice Counter Reset',
+        description: 'Next invoice number has been reset to 001.',
+      });
+      setIsResetDialogOpen(false);
+    } catch (err: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Reset Failed',
+        description: err.message,
+      });
+    } finally {
+      setIsResettingCounter(false);
+    }
+  };
 
 
   const categories = useMemo(() => {
@@ -366,7 +422,7 @@ export default function NewInvoicePage() {
     setItems(newItems);
   };
 
-  const { subtotal, gstAmount, total } = useMemo(() => {
+  const { subtotal, gstAmount, grossTotal, total } = useMemo(() => {
     let subtotal = 0;
     let gstAmount = 0;
 
@@ -375,12 +431,16 @@ export default function NewInvoicePage() {
       gstAmount += (item.total * item.gstPercentage) / 100;
     });
 
+    const grossTotal = subtotal + gstAmount;
+    const netTotal = Math.max(0, Math.round((grossTotal - (discount || 0)) * 100) / 100);
+
     return {
       subtotal,
       gstAmount,
-      total: subtotal + gstAmount,
+      grossTotal,
+      total: netTotal,
     };
-  }, [items]);
+  }, [items, discount]);
 
   useEffect(() => {
     if (paymentStatus === 'Paid') {
@@ -420,11 +480,22 @@ export default function NewInvoicePage() {
 
               // --- 2. LOGIC PHASE ---
               let newCount = 1;
+              const currentMonthKey = getCurrentMonthKey(invoiceDate);
+              const isMonthlyReset = popoverAutoReset || (defaultProfile?.autoResetMonthly ?? false);
               if (counterDoc.exists()) {
-                  newCount = counterDoc.data().currentNumber + 1;
+                const cData = counterDoc.data();
+                if (isMonthlyReset && cData.lastResetMonth && cData.lastResetMonth !== currentMonthKey) {
+                  newCount = 1;
+                } else {
+                  newCount = (cData.currentNumber || 0) + 1;
+                }
               }
-              const formattedCount = String(newCount).padStart(3, '0');
-              const invoiceNumber = `${popoverPrefix}${formattedCount}${popoverSuffix}`;
+              const invoiceNumber = formatInvoiceNumber({
+                prefix: popoverPrefix || defaultProfile?.invoicePrefix || 'INV-',
+                suffix: popoverSuffix || defaultProfile?.invoiceSuffix || '',
+                sequenceNumber: newCount,
+                date: invoiceDate,
+              });
 
               const productUpdates: { ref: any; newStock: number }[] = [];
               for (let i = 0; i < items.length; i++) {
@@ -456,7 +527,7 @@ export default function NewInvoicePage() {
               let finalCustomerId = selectedCustomer?.id || '';
 
               // --- 3. WRITE PHASE ---
-              transaction.set(counterRef, { currentNumber: newCount }, { merge: true });
+              transaction.set(counterRef, { currentNumber: newCount, lastResetMonth: currentMonthKey }, { merge: true });
 
               for (const update of productUpdates) {
                   transaction.update(update.ref, { stockQuantity: update.newStock });
@@ -491,10 +562,9 @@ export default function NewInvoicePage() {
                 });
               }
 
-              transaction.set(newInvoiceRef, {
+              const invoiceData: Record<string, any> = {
                   invoiceNumber,
                   date: invoiceDate.toISOString(),
-                  customerId: finalCustomerId || undefined,
                   customerName: customerName || 'N/A',
                   customerMobile: customerMobile || '',
                   customerAddress: customerAddress || '',
@@ -502,10 +572,17 @@ export default function NewInvoicePage() {
                   subtotal,
                   gstAmount,
                   total,
+                  discount: discount || 0,
                   paymentStatus,
                   paymentMode,
-                  amountPaid: paymentStatus === 'Partial' ? amountPaid : total,
-              });
+                  amountPaid: paymentStatus === 'Paid' ? total : paymentStatus === 'Partial' ? (amountPaid || 0) : 0,
+              };
+
+              if (finalCustomerId) {
+                  invoiceData.customerId = finalCustomerId;
+              }
+
+              transaction.set(newInvoiceRef, invoiceData);
           });
 
 
@@ -533,12 +610,13 @@ export default function NewInvoicePage() {
     const profileRef = doc(firestore, 'companyProfiles', defaultProfile.id);
     setDocumentNonBlocking(profileRef, {
         invoicePrefix: popoverPrefix,
-        invoiceSuffix: popoverSuffix
+        invoiceSuffix: popoverSuffix,
+        autoResetMonthly: popoverAutoReset,
     }, { merge: true });
 
     toast({
         title: 'Invoice Format Updated',
-        description: 'The default invoice format has been saved.'
+        description: 'The default invoice format and reset preferences have been saved.'
     });
   }
 
@@ -583,40 +661,151 @@ export default function NewInvoicePage() {
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
                     <Label>Next Invoice Number</Label>
-                    <Popover>
+                    <div className="flex items-center gap-1">
+                      {/* Reset to 001 Action with Reset Icon */}
+                      <AlertDialog open={isResetDialogOpen} onOpenChange={setIsResetDialogOpen}>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400"
+                            title="Reset invoice sequence to 001"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle className="flex items-center gap-2">
+                              <RotateCcw className="h-5 w-5 text-amber-500" />
+                              Reset Invoice Sequence to 001?
+                            </AlertDialogTitle>
+                            <AlertDialogDescription className="space-y-2">
+                              <p>
+                                This will reset the sequence counter to 0. The next created invoice will start at <strong>001</strong>.
+                              </p>
+                              <div className="p-2.5 rounded bg-muted font-mono text-xs text-foreground">
+                                Next Invoice will be: <strong>{formatInvoiceNumber({ prefix: popoverPrefix, suffix: popoverSuffix, sequenceNumber: 1, date: invoiceDate })}</strong>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground">
+                                Previously saved invoices will not be affected.
+                              </p>
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={handleResetCounter}
+                              disabled={isResettingCounter}
+                              className="bg-amber-600 hover:bg-amber-700 text-white"
+                            >
+                              {isResettingCounter ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Yes, Reset to 001'}
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+
+                      <Popover>
                         <PopoverTrigger asChild>
-                             <Button variant="ghost" size="icon" className="h-6 w-6">
+                             <Button variant="ghost" size="icon" className="h-6 w-6" title="Configure Invoice Format">
                                 <Settings2 className="h-4 w-4"/>
                              </Button>
                         </PopoverTrigger>
                         <PopoverContent className="w-80">
-                            <div className="grid gap-4">
-                                <div className="space-y-2">
-                                    <h4 className="font-medium leading-none">Invoice Format</h4>
-                                    <p className="text-sm text-muted-foreground">
-                                        Set the prefix and suffix for invoice numbers.
-                                    </p>
-                                </div>
-                                <div className="grid gap-2">
-                                     <div className="grid grid-cols-3 items-center gap-4">
-                                        <Label htmlFor="prefix">Prefix</Label>
-                                        <Input id="prefix" value={popoverPrefix} onChange={(e) => setPopoverPrefix(e.target.value)} className="col-span-2 h-8" />
-                                    </div>
-                                    <div className="grid grid-cols-3 items-center gap-4">
-                                        <Label htmlFor="suffix">Suffix</Label>
-                                        <Input id="suffix" value={popoverSuffix} onChange={(e) => setPopoverSuffix(e.target.value)} className="col-span-2 h-8" />
-                                    </div>
-                                    <Button size="sm" onClick={handleUpdateInvoiceFormat}>Save</Button>
-                                </div>
+                          <div className="grid gap-3 text-xs">
+                            <div className="space-y-1">
+                              <h4 className="font-semibold leading-none text-sm">Invoice Number Format</h4>
+                              <p className="text-[11px] text-muted-foreground">
+                                Set the prefix, suffix, and monthly reset behavior.
+                              </p>
                             </div>
+                            <div className="grid grid-cols-3 items-center gap-2">
+                              <Label htmlFor="prefix" className="text-xs">Prefix</Label>
+                              <Input
+                                id="prefix"
+                                value={popoverPrefix}
+                                onChange={(e) => setPopoverPrefix(e.target.value)}
+                                className="col-span-2 h-8 font-mono text-xs uppercase"
+                                placeholder="INV-"
+                              />
+                            </div>
+                            <div className="grid grid-cols-3 items-center gap-2">
+                              <Label htmlFor="suffix" className="text-xs">Suffix</Label>
+                              <Input
+                                id="suffix"
+                                value={popoverSuffix}
+                                onChange={(e) => setPopoverSuffix(e.target.value)}
+                                className="col-span-2 h-8 font-mono text-xs uppercase"
+                                placeholder="/26"
+                              />
+                            </div>
+
+                            {/* Dynamic date tokens */}
+                            <div className="space-y-1 bg-muted/40 p-2 rounded border">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] text-muted-foreground">Insert Date Token:</span>
+                                <div className="flex flex-wrap gap-1">
+                                  {['{YY}', '{MM}', '{MMM}', '{YYYY}', '{FY}'].map((t) => (
+                                    <Badge
+                                      key={t}
+                                      variant="secondary"
+                                      className="text-[10px] px-1 py-0 cursor-pointer font-mono hover:bg-primary/20"
+                                      onClick={() => setPopoverPrefix((prev) => `${prev}${t}`)}
+                                    >
+                                      +{t}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Monthly Auto Reset */}
+                            <div className="flex items-center justify-between p-2 rounded border bg-card">
+                              <div className="space-y-0.5">
+                                <div className="font-medium text-xs">Auto-Reset Monthly</div>
+                                <div className="text-[10px] text-muted-foreground">Restart sequence from 001 each month</div>
+                              </div>
+                              <Switch
+                                checked={popoverAutoReset}
+                                onCheckedChange={setPopoverAutoReset}
+                              />
+                            </div>
+
+                            <div className="p-2 rounded bg-muted/60 font-mono text-[11px] text-muted-foreground">
+                              Preview: <strong className="text-foreground">{nextInvoiceNumber}</strong>
+                            </div>
+
+                            <div className="flex gap-2 pt-1">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs flex-1 gap-1 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800"
+                                onClick={handleResetCounter}
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                                Reset to 001
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="h-7 text-xs flex-1"
+                                onClick={handleUpdateInvoiceFormat}
+                              >
+                                Save Format
+                              </Button>
+                            </div>
+                          </div>
                         </PopoverContent>
                     </Popover>
+                    </div>
                 </div>
                 <Input
                   id="invoice-number"
                   value={nextInvoiceNumber}
                   disabled
-                  className="font-mono"
+                  className="font-mono font-semibold"
                 />
               </div>
             </CardContent>
@@ -991,9 +1180,31 @@ export default function NewInvoicePage() {
                   })}
                 </span>
               </div>
-              <div className="flex items-center justify-between font-semibold">
-                <span className="text-muted-foreground">Total</span>
-                <span>
+              {/* Optional Discount / Bargain */}
+              <div className="grid gap-1 pt-1 border-t">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="inv-discount" className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Tag className="h-3 w-3 text-indigo-600" />
+                    Discount / Bargain (₹)
+                  </Label>
+                  {discount > 0 && (
+                    <span className="text-xs font-mono font-semibold text-indigo-600">-₹{discount.toLocaleString()}</span>
+                  )}
+                </div>
+                <Input
+                  id="inv-discount"
+                  type="number"
+                  min="0"
+                  max={grossTotal}
+                  placeholder="0.00"
+                  value={discount || ''}
+                  onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                  className="h-8 text-xs font-mono"
+                />
+              </div>
+              <div className="flex items-center justify-between font-semibold border-t pt-2">
+                <span className="text-muted-foreground">Net Total to Pay</span>
+                <span className="text-base text-foreground font-bold font-mono">
                   ₹{total.toLocaleString(undefined, {
                     maximumFractionDigits: 2,
                   })}

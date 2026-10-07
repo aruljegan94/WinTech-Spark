@@ -38,9 +38,17 @@ yarn-error.log*
 next-env.d.ts
 
 .genkit/*
+# Environment & Secrets (prevent accidental leakage)
 .env
+.env*
 .env.local
+.env.development
+.env.test
 .env.production
+.env.staging
+*.env
+!.env.example
+!.env.production.example
 
 # firebase
 firebase-debug.log

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,17 +27,18 @@ import {
   Trash2, Plus, Pencil, CheckCircle2, TrendingUp, TrendingDown, Loader2,
   ShieldAlert, Package, AlertCircle, PartyPopper, Save, RefreshCw, X, Building2,
   Upload, Printer, IndianRupee, MessageCircle, ArrowRight, ExternalLink, HelpCircle,
-  Receipt
+  Receipt, RotateCcw
 } from 'lucide-react';
-import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
+import { useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
 import {
-  collection, doc, setDoc, deleteDoc, getDocs, writeBatch, query, orderBy,
+  collection, doc, setDoc, deleteDoc, getDocs, writeBatch, query, orderBy, where
 } from 'firebase/firestore';
 import type { Employee, AppSettings, CompanyProfile } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 import { format, differenceInDays, parseISO } from 'date-fns';
 import { BusinessProfileSettings } from './_components/business-profile-settings';
 import { generateBarcodeSVG } from '@/lib/barcode-generator';
+import { formatInvoiceNumber, calculateNextSequence, getCurrentMonthKey } from '@/lib/invoice-number';
 import Link from 'next/link';
 
 const EMPTY_EMP: Omit<Employee, 'id'> = {
@@ -77,8 +78,32 @@ export default function SettingsPage() {
   const [empSaving, setEmpSaving] = useState(false);
   const [deleteEmpId, setDeleteEmpId] = useState<string | null>(null);
 
-  // ── General Preferences (Invoice numbering, Print format, etc) ───────────
+  // ── Company Profile & Invoice Counter Queries ─────────────────────────────
+  const defaultProfileQuery = useMemoFirebase(
+    () => (firestore ? query(collection(firestore, 'companyProfiles'), where('isDefault', '==', true)) : null),
+    [firestore]
+  );
+  const { data: defaultProfileData } = useCollection<CompanyProfile>(defaultProfileQuery);
+  const defaultProfile = useMemo(() => defaultProfileData?.[0], [defaultProfileData]);
+
+  const salesCounterRef = useMemoFirebase(
+    () => (firestore ? doc(firestore, 'counters', 'sales') : null),
+    [firestore]
+  );
+  const { data: salesCounter } = useDoc<{ currentNumber: number; lastResetMonth?: string }>(salesCounterRef);
+
+  // ── Unified Invoice Number & Terms ──────────────────────────────────────────
   const [invoicePrefix, setInvoicePrefix] = useState('INV-');
+  const [invoiceSuffix, setInvoiceSuffix] = useState('');
+  const [autoResetMonthly, setAutoResetMonthly] = useState(false);
+  const [termsAndConditions, setTermsAndConditions] = useState(
+    '1. Goods once sold will not be taken back.\n2. Subject to local jurisdiction.'
+  );
+  const [savingInvoiceSettings, setSavingInvoiceSettings] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [isResettingCounter, setIsResettingCounter] = useState(false);
+
+  // ── General Preferences (Print format, Payment Mode, etc) ───────────
   const [defaultPrintMode, setDefaultPrintMode] = useState<'thermal-80' | 'thermal-58' | 'a4'>('thermal-80');
   const [defaultPaymentMode, setDefaultPaymentMode] = useState('Cash');
   const [savingGeneral, setSavingGeneral] = useState(false);
@@ -123,7 +148,10 @@ export default function SettingsPage() {
               ...prev,
               ...data,
             }));
-            if (data.invoicePrefix) setInvoicePrefix(data.invoicePrefix);
+            if (data.invoicePrefix && !defaultProfile?.invoicePrefix) setInvoicePrefix(data.invoicePrefix);
+            if (data.invoiceSuffix && !defaultProfile?.invoiceSuffix) setInvoiceSuffix(data.invoiceSuffix);
+            if (data.autoResetMonthly !== undefined && defaultProfile?.autoResetMonthly === undefined) setAutoResetMonthly(!!data.autoResetMonthly);
+            if (data.termsAndConditions && !defaultProfile?.termsAndConditions) setTermsAndConditions(data.termsAndConditions);
             if (data.defaultPrintMode) setDefaultPrintMode(data.defaultPrintMode);
             if (data.defaultPaymentMode) setDefaultPaymentMode(data.defaultPaymentMode);
           }
@@ -133,7 +161,17 @@ export default function SettingsPage() {
       }
     };
     fetchSettings();
-  }, [firestore]);
+  }, [firestore, defaultProfile]);
+
+  // Sync state when default company profile is fetched
+  useEffect(() => {
+    if (defaultProfile) {
+      if (defaultProfile.invoicePrefix !== undefined) setInvoicePrefix(defaultProfile.invoicePrefix);
+      if (defaultProfile.invoiceSuffix !== undefined) setInvoiceSuffix(defaultProfile.invoiceSuffix);
+      if (defaultProfile.autoResetMonthly !== undefined) setAutoResetMonthly(!!defaultProfile.autoResetMonthly);
+      if (defaultProfile.termsAndConditions !== undefined) setTermsAndConditions(defaultProfile.termsAndConditions);
+    }
+  }, [defaultProfile]);
 
   // Initial barcode render
   useEffect(() => {
@@ -176,20 +214,84 @@ export default function SettingsPage() {
   // Payroll summary
   const totalPayrollMonthly = (employees || []).reduce((acc, e) => acc + (Number(e.salary) || 0), 0);
 
-  // ── Save General Preferences ──────────────────────────────────────────────
+  // ── Save Unified Invoice Number & Terms ────────────────────────────────────
+  const saveInvoiceSettings = async () => {
+    if (!firestore) return;
+    setSavingInvoiceSettings(true);
+    try {
+      if (defaultProfile?.id) {
+        await setDoc(doc(firestore, 'companyProfiles', defaultProfile.id), {
+          invoicePrefix,
+          invoiceSuffix,
+          autoResetMonthly,
+          termsAndConditions,
+        }, { merge: true });
+      } else {
+        const snap = await getDocs(collection(firestore, 'companyProfiles'));
+        if (!snap.empty) {
+          await setDoc(snap.docs[0].ref, {
+            invoicePrefix,
+            invoiceSuffix,
+            autoResetMonthly,
+            termsAndConditions,
+          }, { merge: true });
+        }
+      }
+
+      await setDoc(doc(firestore, 'settings', 'app'), {
+        invoicePrefix,
+        invoiceSuffix,
+        autoResetMonthly,
+        termsAndConditions,
+      }, { merge: true });
+
+      toast({
+        title: 'Invoice Number & Terms Saved',
+        description: 'Invoice numbering sequence and terms disclaimers updated.',
+      });
+    } catch (e: any) {
+      toast({ variant: 'destructive', title: 'Error', description: e.message });
+    } finally {
+      setSavingInvoiceSettings(false);
+    }
+  };
+
+  // ── Reset Sales Invoice Counter to 001 ─────────────────────────────────────
+  const handleResetCounter = async () => {
+    if (!firestore) return;
+    setIsResettingCounter(true);
+    try {
+      await setDoc(doc(firestore, 'counters', 'sales'), {
+        currentNumber: 0,
+        lastResetMonth: getCurrentMonthKey(),
+        resetAt: new Date().toISOString(),
+      }, { merge: true });
+
+      toast({
+        title: 'Invoice Counter Reset',
+        description: 'Sequence counter reset to 0. Next invoice will start at 001.',
+      });
+      setResetDialogOpen(false);
+    } catch (e: any) {
+      toast({ variant: 'destructive', title: 'Reset Failed', description: e.message });
+    } finally {
+      setIsResettingCounter(false);
+    }
+  };
+
+  // ── Save Print Hardware & Payment Defaults ────────────────────────────────
   const saveGeneralPreferences = async () => {
     if (!firestore) return;
     setSavingGeneral(true);
     try {
       await setDoc(doc(firestore, 'settings', 'app'), {
-        invoicePrefix,
         defaultPrintMode,
         defaultPaymentMode,
       }, { merge: true });
 
       toast({
-        title: 'Preferences Saved',
-        description: 'Invoice numbering and printing defaults updated.',
+        title: 'Hardware & Payment Saved',
+        description: 'Default printer format and payment mode updated.',
       });
     } catch (e: any) {
       toast({ variant: 'destructive', title: 'Error', description: e.message });
@@ -369,6 +471,15 @@ export default function SettingsPage() {
     }
   };
 
+  const currentCount = salesCounter?.currentNumber ?? 0;
+  const nextSeq = calculateNextSequence(salesCounter, autoResetMonthly);
+  const previewInvoiceNumber = formatInvoiceNumber({
+    prefix: invoicePrefix,
+    suffix: invoiceSuffix,
+    sequenceNumber: nextSeq,
+    date: new Date(),
+  });
+
   return (
     <>
       <PageHeader
@@ -403,89 +514,276 @@ export default function SettingsPage() {
           <BusinessProfileSettings />
         </TabsContent>
 
-        {/* ── 2. GENERAL & BILLING DEFAULTS (AWESOME REVAMP) ─────────────── */}
-        <TabsContent value="general" className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            {/* Invoice Configuration Card */}
+        {/* ── 2. GENERAL & BILLING DEFAULTS ──────────────────────────────── */}
+        <TabsContent value="general" className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* Unified Invoice Number & Terms Card */}
             <Card className="border-primary/20 shadow-xs">
-              <CardHeader className="p-4 pb-2 border-b">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <div className="p-1 rounded-md bg-primary/10 text-primary">
-                    <Receipt className="h-4 w-4" />
-                  </div>
-                  Invoice Series &amp; Print Hardware Defaults
-                </CardTitle>
+              <CardHeader className="p-4 pb-3 border-b">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <div className="p-1 rounded-md bg-primary/10 text-primary">
+                      <Receipt className="h-4 w-4" />
+                    </div>
+                    Invoice Number &amp; Terms
+                  </CardTitle>
+                  <Badge variant="outline" className="text-[10px] font-mono">
+                    Single Billing Source
+                  </Badge>
+                </div>
                 <CardDescription className="text-xs">
-                  Automate invoice numbering sequence and default printer paper output.
+                  Sequential numbering, monthly auto-resets, prefix/suffix patterns, and legal invoice terms.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="p-4 space-y-3 text-xs">
-                <div className="space-y-1">
-                  <Label className="text-xs">Invoice Prefix Code</Label>
-                  <Input
-                    value={invoicePrefix}
-                    onChange={(e) => setInvoicePrefix(e.target.value.toUpperCase())}
-                    placeholder="e.g. INV- or WT-"
-                    className="h-8 font-mono uppercase"
+              <CardContent className="p-4 space-y-3.5 text-xs">
+                {/* Prefix and Suffix */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Invoice Prefix</Label>
+                    <Input
+                      value={invoicePrefix}
+                      onChange={(e) => setInvoicePrefix(e.target.value)}
+                      placeholder="e.g. INV- or WT/"
+                      className="h-8 font-mono text-xs uppercase"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Invoice Suffix (Optional)</Label>
+                    <Input
+                      value={invoiceSuffix}
+                      onChange={(e) => setInvoiceSuffix(e.target.value)}
+                      placeholder="e.g. /26 or -M"
+                      className="h-8 font-mono text-xs uppercase"
+                    />
+                  </div>
+                </div>
+
+                {/* Tokens and Presets */}
+                <div className="space-y-1.5 bg-muted/30 p-2.5 rounded-lg border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-muted-foreground">Dynamic Date Tokens:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {['{YY}', '{MM}', '{MMM}', '{YYYY}', '{FY}'].map((token) => (
+                        <Badge
+                          key={token}
+                          variant="secondary"
+                          className="text-[10px] px-1.5 py-0 cursor-pointer font-mono hover:bg-primary/20 transition-colors"
+                          title={`Click to append ${token} to prefix`}
+                          onClick={() => setInvoicePrefix((prev) => `${prev}${token}`)}
+                        >
+                          +{token}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-border/50">
+                    <span className="text-[10px] text-muted-foreground">Presets:</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-5 text-[10px] px-2"
+                      onClick={() => { setInvoicePrefix('INV-'); setInvoiceSuffix(''); }}
+                    >
+                      Default: INV-001
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-5 text-[10px] px-2"
+                      onClick={() => { setInvoicePrefix('INV-{YY}{MM}-'); setInvoiceSuffix(''); }}
+                    >
+                      Monthly: INV-2610-001
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-5 text-[10px] px-2"
+                      onClick={() => { setInvoicePrefix('INV/{FY}/'); setInvoiceSuffix(''); }}
+                    >
+                      FY: INV/26-27/001
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Live Preview */}
+                <div className="rounded-lg bg-primary/5 border border-primary/20 p-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">Next Invoice Preview</div>
+                    <div className="font-mono font-bold text-sm text-foreground mt-0.5">
+                      {previewInvoiceNumber}
+                    </div>
+                  </div>
+                  <Badge variant="secondary" className="font-mono text-xs">
+                    Sequence #{nextSeq}
+                  </Badge>
+                </div>
+
+                {/* Monthly Auto Reset Switch */}
+                <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                  <div className="space-y-0.5">
+                    <div className="font-medium text-xs text-foreground">Auto-Reset Sequence Monthly</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Automatically restarts invoice counter from 001 on the 1st of each calendar month.
+                    </div>
+                  </div>
+                  <Switch
+                    checked={autoResetMonthly}
+                    onCheckedChange={setAutoResetMonthly}
                   />
-                  <p className="text-[11px] text-muted-foreground">
-                    Example generated invoice: <strong className="font-mono text-foreground">{invoicePrefix}006-2026</strong>
-                  </p>
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-xs">Default Receipt Paper Format</Label>
-                  <div className="grid grid-cols-3 gap-2 pt-1">
-                    {[
-                      { id: 'thermal-80', label: '80mm Thermal', sub: 'Standard Roll' },
-                      { id: 'thermal-58', label: '58mm Thermal', sub: 'Compact Roll' },
-                      { id: 'a4', label: 'A4 Laser', sub: 'Full Sheet' },
-                    ].map((mode) => (
-                      <div
-                        key={mode.id}
-                        onClick={() => setDefaultPrintMode(mode.id as any)}
-                        className={`cursor-pointer border rounded-lg p-2 text-center transition-all ${
-                          defaultPrintMode === mode.id
-                            ? 'border-primary bg-primary/10 text-primary font-semibold'
-                            : 'border-border hover:bg-muted/40 text-muted-foreground'
-                        }`}
-                      >
-                        <Printer className="h-4 w-4 mx-auto mb-1 opacity-70" />
-                        <div className="text-[11px]">{mode.label}</div>
-                        <div className="text-[10px] opacity-70">{mode.sub}</div>
-                      </div>
-                    ))}
+                {/* Counter Status & Manual Reset to 001 */}
+                <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/5 flex items-center justify-between gap-3">
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="font-medium text-xs text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <RotateCcw className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                      Sequence Generator Counter
+                    </div>
+                    <div className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                      Current Counter: <strong>#{currentCount}</strong> (Next created: <strong>#{nextSeq}</strong>)
+                    </div>
                   </div>
+                  <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setResetDialogOpen(true)}
+                      className="h-7 text-xs gap-1.5 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100/50 dark:hover:bg-amber-950/50 shrink-0"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Reset to 001
+                    </Button>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle className="flex items-center gap-2">
+                          <RotateCcw className="h-5 w-5 text-amber-500" />
+                          Reset Invoice Sequence to 001?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription className="space-y-2">
+                          <p>
+                            This will reset the internal sales sequence counter to 0. The next invoice created will start at <strong>001</strong>.
+                          </p>
+                          <div className="p-2.5 rounded bg-muted font-mono text-xs text-foreground">
+                            Next Generated Invoice: <strong>{formatInvoiceNumber({ prefix: invoicePrefix, suffix: invoiceSuffix, sequenceNumber: 1, date: new Date() })}</strong>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Note: Existing invoices already saved in the database will not be affected.
+                          </p>
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={handleResetCounter}
+                          disabled={isResettingCounter}
+                          className="bg-amber-600 hover:bg-amber-700 text-white"
+                        >
+                          {isResettingCounter ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Yes, Reset to 001'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-xs">Default Payment Mode on Invoice Creation</Label>
-                  <div className="flex gap-2">
-                    {['Cash', 'UPI', 'Bank Transfer'].map((m) => (
-                      <Button
-                        key={m}
-                        type="button"
-                        size="sm"
-                        variant={defaultPaymentMode === m ? 'default' : 'outline'}
-                        className="h-7 text-xs flex-1"
-                        onClick={() => setDefaultPaymentMode(m)}
-                      >
-                        {m}
-                      </Button>
-                    ))}
+                {/* Terms and Conditions */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold">Invoice Terms &amp; Conditions</Label>
+                    <span className="text-[10px] text-muted-foreground">Printed on Tax Invoices &amp; PDF</span>
                   </div>
+                  <Textarea
+                    rows={3}
+                    value={termsAndConditions}
+                    onChange={(e) => setTermsAndConditions(e.target.value)}
+                    placeholder="1. Goods once sold will not be taken back.&#10;2. Subject to local jurisdiction."
+                    className="text-xs font-mono"
+                  />
                 </div>
 
                 <Button
-                  onClick={saveGeneralPreferences}
-                  disabled={savingGeneral}
-                  className="w-full gap-2 mt-2 h-8 text-xs bg-primary"
+                  onClick={saveInvoiceSettings}
+                  disabled={savingInvoiceSettings}
+                  className="w-full gap-2 h-8 text-xs bg-primary"
                 >
-                  {savingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                  Save Billing Defaults
+                  {savingInvoiceSettings ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  Save Invoice Number &amp; Terms
                 </Button>
               </CardContent>
             </Card>
+
+            {/* Right Column: Hardware & Payment Defaults */}
+            <div className="space-y-4">
+              <Card className="border-border shadow-xs">
+                <CardHeader className="p-4 pb-2 border-b">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <div className="p-1 rounded-md bg-primary/10 text-primary">
+                      <Printer className="h-4 w-4" />
+                    </div>
+                    Print Hardware &amp; Payment Defaults
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Default printer paper output and default payment method when creating invoices.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-4 space-y-3 text-xs">
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold">Default Receipt Paper Format</Label>
+                    <div className="grid grid-cols-3 gap-2 pt-1">
+                      {[
+                        { id: 'thermal-80', label: '80mm Thermal', sub: 'Standard Roll' },
+                        { id: 'thermal-58', label: '58mm Thermal', sub: 'Compact Roll' },
+                        { id: 'a4', label: 'A4 Laser', sub: 'Full Sheet' },
+                      ].map((mode) => (
+                        <div
+                          key={mode.id}
+                          onClick={() => setDefaultPrintMode(mode.id as any)}
+                          className={`cursor-pointer border rounded-lg p-2 text-center transition-all ${
+                            defaultPrintMode === mode.id
+                              ? 'border-primary bg-primary/10 text-primary font-semibold'
+                              : 'border-border hover:bg-muted/40 text-muted-foreground'
+                          }`}
+                        >
+                          <Printer className="h-4 w-4 mx-auto mb-1 opacity-70" />
+                          <div className="text-[11px]">{mode.label}</div>
+                          <div className="text-[10px] opacity-70">{mode.sub}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold">Default Payment Mode on Invoice Creation</Label>
+                    <div className="flex gap-2">
+                      {['Cash', 'UPI', 'Bank Transfer'].map((m) => (
+                        <Button
+                          key={m}
+                          type="button"
+                          size="sm"
+                          variant={defaultPaymentMode === m ? 'default' : 'outline'}
+                          className="h-7 text-xs flex-1"
+                          onClick={() => setDefaultPaymentMode(m)}
+                        >
+                          {m}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <Button
+                    onClick={saveGeneralPreferences}
+                    disabled={savingGeneral}
+                    className="w-full gap-2 mt-2 h-8 text-xs"
+                    variant="outline"
+                  >
+                    {savingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    Save Hardware &amp; Payment Defaults
+                  </Button>
+                </CardContent>
+              </Card>
 
             {/* System Status & Cache Maintenance */}
             <Card className="border-border shadow-xs">
@@ -547,7 +845,8 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           </div>
-        </TabsContent>
+        </div>
+      </TabsContent>
 
         {/* ── 3. DATA & BACKUP (AWESOME LIVE METRICS & RESTORE) ──────────── */}
         <TabsContent value="data" className="space-y-3">

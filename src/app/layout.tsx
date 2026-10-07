@@ -32,6 +32,7 @@ export default function RootLayout({
           content="A simple, fast PWA billing software for a small automobile shop."
         />
         <link rel="manifest" href="/manifest.json" />
+        <link rel="icon" href="/favicon.ico" sizes="any" />
       </head>
       <body className={`${fontSans.variable} ${fontMono.variable}`}>
         <ThemeProvider

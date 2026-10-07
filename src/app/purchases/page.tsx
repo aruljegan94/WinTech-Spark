@@ -289,6 +289,21 @@ export default function PurchasesPage() {
         const productRefs = (purchaseData.items || []).map(item => doc(firestore, 'products', item.productId));
         const productDocs = await Promise.all(productRefs.map(ref => transaction.get(ref)));
 
+        // Read vendor doc before any writes
+        const vId = purchaseData.vendorId ||
+          vendors?.find((v) =>
+            purchaseData.supplierName?.toLowerCase().includes(v.companyName.toLowerCase()) ||
+            purchaseData.supplierName?.toLowerCase().includes(v.name.toLowerCase())
+          )?.id;
+
+        let vRef = null;
+        let vSnap = null;
+        if (vId) {
+          vRef = doc(firestore, 'vendors', vId);
+          vSnap = await transaction.get(vRef);
+        }
+
+        // --- WRITE PHASE (after all reads are finished) ---
         productDocs.forEach((productDoc, index) => {
           if (productDoc.exists()) {
             const currentStock = productDoc.data().stockQuantity;
@@ -301,21 +316,11 @@ export default function PurchasesPage() {
         // Synchronize with Vendor: deduct unpaid portion of this deleted bill from vendor pending amount
         const unpaidOnThis = Math.max(0, purchaseData.totalAmount - (purchaseData.amountPaid || (purchaseData.paymentStatus === 'Paid' ? purchaseData.totalAmount : 0)));
 
-        const vId = purchaseData.vendorId ||
-          vendors?.find((v) =>
-            purchaseData.supplierName?.toLowerCase().includes(v.companyName.toLowerCase()) ||
-            purchaseData.supplierName?.toLowerCase().includes(v.name.toLowerCase())
-          )?.id;
-
-        if (vId) {
-          const vRef = doc(firestore, 'vendors', vId);
-          const vSnap = await transaction.get(vRef);
-          if (vSnap.exists()) {
-            const currentPending = vSnap.data().pendingAmount || 0;
-            transaction.update(vRef, {
-              pendingAmount: Math.max(0, currentPending - unpaidOnThis),
-            });
-          }
+        if (vRef && vSnap && vSnap.exists()) {
+          const currentPending = vSnap.data().pendingAmount || 0;
+          transaction.update(vRef, {
+            pendingAmount: Math.max(0, currentPending - unpaidOnThis),
+          });
         }
 
         transaction.delete(purchaseRef);

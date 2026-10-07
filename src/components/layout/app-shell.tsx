@@ -33,6 +33,7 @@ import {
   ChevronRight,
   PanelLeft,
   ClipboardList,
+  ClipboardCheck,
   Barcode,
 } from "lucide-react";
 import Link from "next/link";
@@ -86,6 +87,7 @@ const baseNavSections: NavSection[] = [
     label: "Finance & Reports",
     items: [
       { href: "/expenses", icon: Wallet, label: "Expenses" },
+      { href: "/checklist", icon: ClipboardCheck, label: "CheckList" },
       { href: "/reports", icon: FileSpreadsheet, label: "Reports" },
       { href: "/analysis", icon: TrendingUp, label: "Analysis" },
     ],

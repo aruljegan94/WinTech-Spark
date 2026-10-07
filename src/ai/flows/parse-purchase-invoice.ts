@@ -37,11 +37,24 @@ const parsePurchaseInvoiceFlow = ai.defineFlow(
     outputSchema: ParsePurchaseInvoiceOutputSchema,
   },
   async (input) => {
-    const { output } = await prompt(input);
-    if (!output) {
-      throw new Error('Failed to parse purchase invoice document.');
+    try {
+      const { output } = await prompt(input);
+      if (!output) {
+        throw new Error('Failed to parse purchase invoice document.');
+      }
+      return output;
+    } catch (err: any) {
+      if (
+        err?.message?.includes('leaked') ||
+        err?.message?.includes('403') ||
+        err?.message?.includes('API key')
+      ) {
+        throw new Error(
+          'Gemini API key was revoked by Google ([403 Forbidden] API key reported as leaked). Please update GEMINI_API_KEY in .env.local with a new key from Google AI Studio.'
+        );
+      }
+      throw err;
     }
-    return output;
   }
 );
 

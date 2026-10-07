@@ -54,9 +54,6 @@ export function BusinessProfileSettings() {
     bankIfsc: '',
     bankBranch: '',
     upiId: '',
-    invoicePrefix: 'INV-',
-    invoiceSuffix: '',
-    termsAndConditions: '1. Goods once sold will not be taken back.\n2. Subject to local jurisdiction.',
   });
 
   const [standardMarkup, setStandardMarkup] = useState<number>(30);
@@ -78,9 +75,6 @@ export function BusinessProfileSettings() {
         bankIfsc: existingProfile.bankIfsc || '',
         bankBranch: existingProfile.bankBranch || '',
         upiId: existingProfile.upiId || '',
-        invoicePrefix: existingProfile.invoicePrefix || 'INV-',
-        invoiceSuffix: existingProfile.invoiceSuffix || '',
-        termsAndConditions: existingProfile.termsAndConditions || '1. Goods once sold will not be taken back.\n2. Subject to local jurisdiction.',
       });
     }
   }, [existingProfile]);
@@ -129,7 +123,7 @@ export function BusinessProfileSettings() {
 
       toast({
         title: 'Business Profile Saved',
-        description: 'Company information, Bank details, and Invoice preferences updated.',
+        description: 'Company information and Bank/UPI details updated.',
       });
     } catch (error: any) {
       console.error('Error saving profile:', error);
@@ -383,64 +377,28 @@ export function BusinessProfileSettings() {
         </Card>
       </div>
 
-      {/* Row 2: Invoicing Format & Inventory Markup Preferences */}
+      {/* Row 2: Inventory Markup Preferences & Invoicing Info */}
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Invoice Number Formatting */}
-        <Card className="shadow-sm">
+        {/* Invoice Number & Terms Guidance (Single source of truth in Billing Defaults) */}
+        <Card className="shadow-sm border-dashed bg-muted/20">
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+              <div className="p-1.5 rounded-lg bg-primary/10 text-primary">
                 <Receipt className="h-4 w-4" />
               </div>
-              <CardTitle className="text-base">Invoice Number & Terms</CardTitle>
+              <CardTitle className="text-base">Invoice Number &amp; Terms</CardTitle>
             </div>
             <CardDescription className="text-xs">
-              Sequential numbering and standard invoice footer disclaimers.
+              Sequential numbering, prefixes/suffixes, monthly resets, and invoice terms disclaimers.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3.5">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="invoicePrefix" className="text-xs font-semibold">
-                  Invoice Prefix
-                </Label>
-                <Input
-                  id="invoicePrefix"
-                  placeholder="INV-"
-                  className="font-mono text-xs"
-                  value={formData.invoicePrefix || ''}
-                  onChange={(e) => handleChange('invoicePrefix', e.target.value)}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="invoiceSuffix" className="text-xs font-semibold">
-                  Invoice Suffix (Optional)
-                </Label>
-                <Input
-                  id="invoiceSuffix"
-                  placeholder="e.g. -26"
-                  className="font-mono text-xs"
-                  value={formData.invoiceSuffix || ''}
-                  onChange={(e) => handleChange('invoiceSuffix', e.target.value)}
-                />
-              </div>
+          <CardContent className="space-y-3">
+            <div className="rounded-lg bg-background/80 border p-3 text-xs text-muted-foreground leading-relaxed">
+              💡 <strong>Unified in Billing Defaults:</strong> To avoid duplicate configuration, all invoice numbering sequences (prefixes, suffixes, monthly auto-reset, and 001 counter reset) and invoice terms &amp; conditions are now centrally managed under the <strong>Billing Defaults</strong> tab.
             </div>
-            <div className="text-[11px] text-muted-foreground bg-muted/40 p-2 rounded font-mono">
-              Next Invoice Preview: <strong>{formData.invoicePrefix || 'INV-'}0042{formData.invoiceSuffix || ''}</strong>
-            </div>
-
-            <div className="space-y-1">
-              <Label htmlFor="terms" className="text-xs font-semibold">
-                Invoice Terms & Conditions
-              </Label>
-              <Textarea
-                id="terms"
-                rows={2}
-                placeholder="1. Goods once sold will not be taken back."
-                value={formData.termsAndConditions || ''}
-                onChange={(e) => handleChange('termsAndConditions', e.target.value)}
-              />
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Head to the <strong>Billing Defaults</strong> tab above to customize invoice numbering patterns or reset sequence numbers to 001.
+            </p>
           </CardContent>
         </Card>
 
