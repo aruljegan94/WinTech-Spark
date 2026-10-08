@@ -49,6 +49,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
+import { ProductSearchCombobox } from '@/components/products/product-search-combobox';
 import {
   Dialog,
   DialogContent,
@@ -82,7 +83,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 import { format } from 'date-fns';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useForm, Controller } from 'react-hook-form';
@@ -92,7 +93,7 @@ import { z } from 'zod';
 
 const saleItemSchema = z.object({
   productId: z.string().min(1, 'Please select a product'),
-  quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+  quantity: z.coerce.number().min(0.001, 'Quantity must be greater than 0'),
 });
 
 type SaleItemFormValues = z.infer<typeof saleItemSchema>;
@@ -359,8 +360,8 @@ export default function NewInvoicePage() {
         });
         return;
       }
-      existingItem.quantity = newQuantity;
-      existingItem.total = existingItem.quantity * existingItem.price;
+      existingItem.quantity = Math.round(newQuantity * 1000) / 1000;
+      existingItem.total = Math.round(existingItem.quantity * existingItem.price * 100) / 100;
       setItems(newItems);
     } else {
       const newItem: SaleItem = {
@@ -369,7 +370,7 @@ export default function NewInvoicePage() {
         quantity: data.quantity,
         price: product.sellingPrice,
         gstPercentage: product.gstPercentage,
-        total: data.quantity * product.sellingPrice,
+        total: Math.round(data.quantity * product.sellingPrice * 100) / 100,
       };
       setItems(prevItems => [...prevItems, newItem]);
     }
@@ -393,8 +394,8 @@ export default function NewInvoicePage() {
         });
         return;
       }
-      existingItem.quantity = newQuantity;
-      existingItem.total = existingItem.quantity * existingItem.price;
+      existingItem.quantity = Math.round(newQuantity * 1000) / 1000;
+      existingItem.total = Math.round(existingItem.quantity * existingItem.price * 100) / 100;
       setItems(newItems);
     } else {
       if (scanQuantity > product.stockQuantity) {
@@ -411,7 +412,7 @@ export default function NewInvoicePage() {
         quantity: scanQuantity,
         price: product.sellingPrice,
         gstPercentage: product.gstPercentage,
-        total: scanQuantity * product.sellingPrice,
+        total: Math.round(scanQuantity * product.sellingPrice * 100) / 100,
       };
       setItems(prevItems => [...prevItems, newItem]);
     }
@@ -423,20 +424,22 @@ export default function NewInvoicePage() {
   };
 
   const { subtotal, gstAmount, grossTotal, total } = useMemo(() => {
-    let subtotal = 0;
-    let gstAmount = 0;
+    let rawSubtotal = 0;
+    let rawGst = 0;
 
     items.forEach((item) => {
-      subtotal += item.total;
-      gstAmount += (item.total * item.gstPercentage) / 100;
+      rawSubtotal += item.total;
+      rawGst += (item.total * item.gstPercentage) / 100;
     });
 
-    const grossTotal = subtotal + gstAmount;
+    const roundedSubtotal = Math.round(rawSubtotal * 100) / 100;
+    const roundedGst = Math.round(rawGst * 100) / 100;
+    const grossTotal = Math.round((roundedSubtotal + roundedGst) * 100) / 100;
     const netTotal = Math.max(0, Math.round((grossTotal - (discount || 0)) * 100) / 100);
 
     return {
-      subtotal,
-      gstAmount,
+      subtotal: roundedSubtotal,
+      gstAmount: roundedGst,
       grossTotal,
       total: netTotal,
     };
@@ -834,24 +837,20 @@ export default function NewInvoicePage() {
                         </Select>
                     </div>
                      <div className="sm:col-span-5">
-                         <Label>Product</Label>
+                         <Label>Search & Find Product</Label>
                         <Controller
                             name="productId"
                             control={itemForm.control}
                             render={({ field }) => (
-                                <Select onValueChange={field.onChange} value={field.value}>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select a product" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {productsLoading && <SelectItem value="loading" disabled>Loading...</SelectItem>}
-                                        {filteredProducts.map((p) => (
-                                        <SelectItem key={p.id} value={p.id} disabled={p.stockQuantity <= 0}>
-                                            {p.productName} ({p.stockQuantity} left)
-                                        </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                                <ProductSearchCombobox
+                                    products={products || []}
+                                    value={field.value}
+                                    filterCategory={selectedCategory}
+                                    disabled={productsLoading}
+                                    priceType="sellingPrice"
+                                    placeholder="Search by name, part no, barcode..."
+                                    onSelect={(p) => field.onChange(p ? p.id : '')}
+                                />
                             )}
                         />
                     </div>
@@ -860,7 +859,16 @@ export default function NewInvoicePage() {
                         <Controller
                             name="quantity"
                             control={itemForm.control}
-                            render={({ field }) => <Input type="number" min="1" {...field} />}
+                            render={({ field }) => (
+                              <Input
+                                type="number"
+                                min="0.001"
+                                step="any"
+                                placeholder="1"
+                                className="font-mono"
+                                {...field}
+                              />
+                            )}
                         />
                     </div>
                     <div className="flex items-end sm:col-span-2">
@@ -903,14 +911,14 @@ export default function NewInvoicePage() {
                       <TableCell>
                         {item.productName}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="font-mono">
                         {item.quantity}
                       </TableCell>
-                      <TableCell className="text-right">
-                        ₹{item.price.toLocaleString()}
+                      <TableCell className="text-right font-mono">
+                        ₹{formatCurrency(item.price)}
                       </TableCell>
-                      <TableCell className="text-right">
-                        ₹{item.total.toLocaleString()}
+                      <TableCell className="text-right font-mono font-medium">
+                        ₹{formatCurrency(item.total)}
                       </TableCell>
                       <TableCell>
                         <Button
@@ -1142,9 +1150,11 @@ export default function NewInvoicePage() {
                   <Input
                     id="amount-paid"
                     type="number"
+                    step="any"
                     value={amountPaid}
                     onChange={(e) => setAmountPaid(Number(e.target.value))}
                     max={total}
+                    className="font-mono"
                   />
                 </div>
               )}
@@ -1170,14 +1180,12 @@ export default function NewInvoicePage() {
             <CardContent className="grid gap-4">
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span>₹{subtotal.toLocaleString()}</span>
+                <span className="font-mono">₹{formatCurrency(subtotal)}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">GST</span>
-                <span>
-                  ₹{gstAmount.toLocaleString(undefined, {
-                    maximumFractionDigits: 2,
-                  })}
+                <span className="font-mono">
+                  ₹{formatCurrency(gstAmount)}
                 </span>
               </div>
               {/* Optional Discount / Bargain */}
@@ -1188,12 +1196,13 @@ export default function NewInvoicePage() {
                     Discount / Bargain (₹)
                   </Label>
                   {discount > 0 && (
-                    <span className="text-xs font-mono font-semibold text-indigo-600">-₹{discount.toLocaleString()}</span>
+                    <span className="text-xs font-mono font-semibold text-indigo-600">-₹{formatCurrency(discount)}</span>
                   )}
                 </div>
                 <Input
                   id="inv-discount"
                   type="number"
+                  step="any"
                   min="0"
                   max={grossTotal}
                   placeholder="0.00"
@@ -1205,9 +1214,7 @@ export default function NewInvoicePage() {
               <div className="flex items-center justify-between font-semibold border-t pt-2">
                 <span className="text-muted-foreground">Net Total to Pay</span>
                 <span className="text-base text-foreground font-bold font-mono">
-                  ₹{total.toLocaleString(undefined, {
-                    maximumFractionDigits: 2,
-                  })}
+                  ₹{formatCurrency(total)}
                 </span>
               </div>
             </CardContent>

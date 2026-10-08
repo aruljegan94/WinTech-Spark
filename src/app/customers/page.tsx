@@ -72,11 +72,15 @@ import {
   setDoc,
   deleteDoc,
   query,
+  where,
+  getDocs,
+  writeBatch,
   orderBy,
   runTransaction,
 } from 'firebase/firestore';
-import type { Customer } from '@/lib/types';
+import type { Customer, Sale } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
+import { Checkbox } from '@/components/ui/checkbox';
 import Link from 'next/link';
 
 const EMPTY_CUSTOMER_FORM: Omit<Customer, 'id' | 'createdAt' | 'updatedAt'> = {
@@ -109,8 +113,10 @@ export default function CustomersPage() {
   // Settle Due Dialog state
   const [settleCustomer, setSettleCustomer] = useState<Customer | null>(null);
   const [settleAmount, setSettleAmount] = useState('');
+  const [settleDiscount, setSettleDiscount] = useState('');
   const [settlePaymentMode, setSettlePaymentMode] = useState<'Cash' | 'UPI' | 'Bank Transfer'>('Cash');
   const [settleNote, setSettleNote] = useState('');
+  const [autoAllocateSales, setAutoAllocateSales] = useState(true);
   const [isSettling, setIsSettling] = useState(false);
 
   // Query customers ordered by name
@@ -318,50 +324,139 @@ export default function CustomersPage() {
   const openSettleDialog = (customer: Customer) => {
     setSettleCustomer(customer);
     setSettleAmount(String(customer.pendingDue || 0));
+    setSettleDiscount('');
     setSettlePaymentMode('Cash');
     setSettleNote('');
+    setAutoAllocateSales(true);
   };
 
   const handleSettleDue = async () => {
     if (!firestore || !settleCustomer) return;
-    const amount = parseFloat(settleAmount);
-    if (isNaN(amount) || amount <= 0) {
-      toast({ variant: 'destructive', title: 'Invalid Amount', description: 'Enter a valid payment amount.' });
+    const amountPaid = parseFloat(settleAmount) || 0;
+    const discountAmount = parseFloat(settleDiscount) || 0;
+    const totalSettled = Math.round((amountPaid + discountAmount) * 100) / 100;
+
+    if (totalSettled <= 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Invalid Settlement',
+        description: 'Enter a valid payment amount or discount concession greater than ₹0.',
+      });
       return;
     }
 
-    if (amount > (settleCustomer.pendingDue || 0)) {
+    if (amountPaid < 0 || discountAmount < 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Negative Values Not Allowed',
+        description: 'Payment and discount amounts cannot be negative.',
+      });
+      return;
+    }
+
+    const currentDue = settleCustomer.pendingDue || 0;
+    if (totalSettled > currentDue + 0.01) {
       toast({
         variant: 'destructive',
         title: 'Amount Exceeds Due',
-        description: `Settlement amount cannot exceed the pending due of ₹${settleCustomer.pendingDue.toLocaleString()}.`,
+        description: `Total cleared (₹${totalSettled.toLocaleString()}) cannot exceed the pending due of ₹${currentDue.toLocaleString()}.`,
       });
       return;
     }
 
     setIsSettling(true);
     try {
-      await runTransaction(firestore, async (transaction) => {
-        const customerRef = doc(firestore, 'customers', settleCustomer.id);
-        const currentDoc = await transaction.get(customerRef);
-        if (!currentDoc.exists()) {
-          throw new Error('Customer does not exist');
+      const batch = writeBatch(firestore);
+      const customerRef = doc(firestore, 'customers', settleCustomer.id);
+      const newPending = Math.max(0, Math.round((currentDue - totalSettled) * 100) / 100);
+
+      // 1. If auto-allocating to sales invoices, distribute to oldest unpaid invoices (FIFO)
+      if (autoAllocateSales) {
+        try {
+          const salesQuery = query(
+            collection(firestore, 'sales'),
+            where('customerId', '==', settleCustomer.id)
+          );
+          const salesSnap = await getDocs(salesQuery);
+
+          if (!salesSnap.empty) {
+            const unpaidSales = salesSnap.docs
+              .map((d) => ({ ...(d.data() as Sale), id: d.id }))
+              .filter((s) => {
+                const paid = s.amountPaid !== undefined ? Number(s.amountPaid) : (s.paymentStatus === 'Paid' ? s.total : 0);
+                const disc = Number(s.discount) || 0;
+                return (paid + disc) < s.total - 0.01;
+              })
+              .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+            let remainingPay = amountPaid;
+            let remainingDiscount = discountAmount;
+
+            for (const s of unpaidSales) {
+              if (remainingPay <= 0 && remainingDiscount <= 0) break;
+              const currentPaid = s.amountPaid !== undefined ? Number(s.amountPaid) : (s.paymentStatus === 'Paid' ? s.total : 0);
+              const currentDiscount = Number(s.discount) || 0;
+              const sDue = Math.max(0, Math.round((s.total - (currentPaid + currentDiscount)) * 100) / 100);
+
+              if (sDue <= 0) continue;
+
+              const payToApply = Math.min(remainingPay, sDue);
+              remainingPay = Math.round((remainingPay - payToApply) * 100) / 100;
+
+              const dueAfterPay = Math.max(0, Math.round((sDue - payToApply) * 100) / 100);
+              const discToApply = Math.min(remainingDiscount, dueAfterPay);
+              remainingDiscount = Math.round((remainingDiscount - discToApply) * 100) / 100;
+
+              const newPaid = Math.round((currentPaid + payToApply) * 100) / 100;
+              const newDiscount = Math.round((currentDiscount + discToApply) * 100) / 100;
+              const isCleared = (newPaid + newDiscount) >= s.total - 0.01;
+              const newStatus: Sale['paymentStatus'] = isCleared ? 'Paid' : (newPaid > 0 ? 'Partial' : s.paymentStatus);
+
+              let paymentLog = `\n[${format(new Date(), 'yyyy-MM-dd')}] Settled ₹${payToApply.toLocaleString()} via ${settlePaymentMode}`;
+              if (discToApply > 0) {
+                paymentLog += ` (Discount: ₹${discToApply.toLocaleString()})`;
+              }
+              if (settleNote.trim()) {
+                paymentLog += ` - ${settleNote.trim()}`;
+              }
+
+              batch.update(doc(firestore, 'sales', s.id), {
+                amountPaid: newPaid,
+                discount: newDiscount,
+                paymentStatus: newStatus,
+                status: newStatus,
+                notes: (s.notes || '') + paymentLog,
+              });
+            }
+          }
+        } catch (fetchErr) {
+          console.warn('Could not auto-allocate to sales invoices:', fetchErr);
         }
+      }
 
-        const currentPending = currentDoc.data().pendingDue || 0;
-        const newPending = Math.max(0, currentPending - amount);
-
-        transaction.update(customerRef, {
-          pendingDue: newPending,
-          updatedAt: new Date().toISOString(),
-        });
+      // 2. Update customer record
+      batch.update(customerRef, {
+        pendingDue: newPending,
+        updatedAt: new Date().toISOString(),
       });
+
+      await batch.commit();
+
+      let desc = `Collected ₹${amountPaid.toLocaleString()}`;
+      if (discountAmount > 0) {
+        desc += ` + ₹${discountAmount.toLocaleString()} discount concession`;
+      }
+      desc += ` from ${settleCustomer.name}. Remaining due: ₹${newPending.toLocaleString()}.`;
 
       toast({
-        title: 'Payment Recorded',
-        description: `Successfully collected ₹${amount.toLocaleString()} from ${settleCustomer.name}.`,
+        title: newPending === 0 ? 'Due Fully Cleared!' : 'Payment & Discount Recorded',
+        description: desc,
       });
+
       setSettleCustomer(null);
+      setSettleAmount('');
+      setSettleDiscount('');
+      setSettleNote('');
     } catch (err: any) {
       console.error('Failed to settle customer due:', err);
       toast({ variant: 'destructive', title: 'Error Settling Payment', description: err.message });
@@ -926,7 +1021,17 @@ export default function CustomersPage() {
       </Dialog>
 
       {/* Settle Due Payment Dialog */}
-      <Dialog open={Boolean(settleCustomer)} onOpenChange={(open) => !open && setSettleCustomer(null)}>
+      <Dialog
+        open={Boolean(settleCustomer)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSettleCustomer(null);
+            setSettleAmount('');
+            setSettleDiscount('');
+            setSettleNote('');
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -939,76 +1044,191 @@ export default function CustomersPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
-            <div className="rounded-lg bg-amber-50 dark:bg-amber-950/40 p-3 border border-amber-200 dark:border-amber-900/60 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-amber-800 dark:text-amber-300 font-medium">Current Outstanding Due</p>
-                <p className="text-xl font-bold text-amber-900 dark:text-amber-200">
-                  ₹{(settleCustomer?.pendingDue || 0).toLocaleString('en-IN')}
-                </p>
+          {settleCustomer && (() => {
+            const currentDue = settleCustomer.pendingDue || 0;
+            const numPaid = parseFloat(settleAmount) || 0;
+            const numDisc = parseFloat(settleDiscount) || 0;
+            const totalSettled = numPaid + numDisc;
+            const remainingDue = Math.max(0, currentDue - totalSettled);
+
+            return (
+              <div className="space-y-4 py-2">
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/40 p-3 border border-amber-200 dark:border-amber-900/60 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-amber-800 dark:text-amber-300 font-medium">Current Outstanding Due</p>
+                    <p className="text-xl font-bold text-amber-900 dark:text-amber-200">
+                      ₹{currentDue.toLocaleString('en-IN')}
+                    </p>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() => {
+                        setSettleAmount(String(currentDue));
+                        setSettleDiscount('');
+                      }}
+                    >
+                      Pay Full
+                    </Button>
+                    {currentDue > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-7"
+                        onClick={() => {
+                          setSettleAmount(String(Math.round(currentDue / 2)));
+                          setSettleDiscount('');
+                        }}
+                      >
+                        50%
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="settle-amount">Payment Amount Collected (₹)</Label>
+                  <div className="relative">
+                    <IndianRupee className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="settle-amount"
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={settleAmount}
+                      onChange={(e) => setSettleAmount(e.target.value)}
+                      className="pl-8 font-mono"
+                      placeholder="Enter amount paid"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="settle-discount">Settlement / Bargain Discount (₹)</Label>
+                    <span className="text-[11px] text-muted-foreground">Concession / Round-off</span>
+                  </div>
+                  <div className="relative">
+                    <IndianRupee className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="settle-discount"
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={settleDiscount}
+                      onChange={(e) => setSettleDiscount(e.target.value)}
+                      className="pl-8 font-mono"
+                      placeholder="0"
+                    />
+                  </div>
+                  {currentDue > numPaid && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs h-6 px-2 text-indigo-600 dark:text-indigo-400 hover:text-indigo-700"
+                      onClick={() => {
+                        const diff = Math.max(0, Math.round((currentDue - numPaid) * 100) / 100);
+                        setSettleDiscount(String(diff));
+                      }}
+                    >
+                      Apply remaining ₹{Math.max(0, currentDue - numPaid).toLocaleString()} as Discount
+                    </Button>
+                  )}
+                </div>
+
+                {/* Live Settlement Breakdown */}
+                {totalSettled > 0 && (
+                  <div className="bg-muted/50 rounded-lg p-3 text-xs border space-y-1.5">
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>Cash / Mode Collected:</span>
+                      <span className="font-semibold text-foreground">₹{numPaid.toLocaleString()}</span>
+                    </div>
+                    {numDisc > 0 && (
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Bargain / Concession Discount:</span>
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                          - ₹{numDisc.toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-medium pt-1 border-t">
+                      <span>Total Due Cleared:</span>
+                      <span className="font-bold text-primary">₹{totalSettled.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-muted-foreground">Remaining Customer Due:</span>
+                      <span className={remainingDue === 0 ? "font-bold text-emerald-600" : "font-semibold text-amber-600"}>
+                        {remainingDue === 0 ? "Fully Cleared (₹0)" : `₹${remainingDue.toLocaleString()}`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label>Payment Mode</Label>
+                  <Select
+                    value={settlePaymentMode}
+                    onValueChange={(val: any) => setSettlePaymentMode(val)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Cash">Cash</SelectItem>
+                      <SelectItem value="UPI">UPI (Google Pay / PhonePe / Paytm)</SelectItem>
+                      <SelectItem value="Bank Transfer">Bank Transfer / NEFT</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="settle-note">Note / Reference (Optional)</Label>
+                  <Input
+                    id="settle-note"
+                    placeholder="e.g. GPay Ref ID #12345"
+                    value={settleNote}
+                    onChange={(e) => setSettleNote(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex items-start space-x-2 pt-1 border-t">
+                  <Checkbox
+                    id="auto-allocate-sales"
+                    checked={autoAllocateSales}
+                    onCheckedChange={(c) => setAutoAllocateSales(!!c)}
+                  />
+                  <div className="grid gap-0.5 leading-none">
+                    <label
+                      htmlFor="auto-allocate-sales"
+                      className="text-xs font-medium cursor-pointer"
+                    >
+                      Auto-allocate payment & discount to oldest sales invoices (FIFO)
+                    </label>
+                    <p className="text-[11px] text-muted-foreground">
+                      Updates customer invoice statuses to Paid / Partial and logs the clearance in sales records.
+                    </p>
+                  </div>
+                </div>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="text-xs h-7"
-                onClick={() => setSettleAmount(String(settleCustomer?.pendingDue || 0))}
-              >
-                Pay Full
-              </Button>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="settle-amount">Payment Amount (₹)</Label>
-              <div className="relative">
-                <IndianRupee className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="settle-amount"
-                  type="number"
-                  min="1"
-                  step="any"
-                  value={settleAmount}
-                  onChange={(e) => setSettleAmount(e.target.value)}
-                  className="pl-8 font-mono"
-                  placeholder="Enter amount paid"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Payment Mode</Label>
-              <Select
-                value={settlePaymentMode}
-                onValueChange={(val: any) => setSettlePaymentMode(val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Cash">Cash</SelectItem>
-                  <SelectItem value="UPI">UPI (Google Pay / PhonePe / Paytm)</SelectItem>
-                  <SelectItem value="Bank Transfer">Bank Transfer / NEFT</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="settle-note">Note / Reference (Optional)</Label>
-              <Input
-                id="settle-note"
-                placeholder="e.g. GPay Ref ID #12345"
-                value={settleNote}
-                onChange={(e) => setSettleNote(e.target.value)}
-              />
-            </div>
-          </div>
+            );
+          })()}
 
           <DialogFooter className="gap-2 sm:gap-0">
             <Button
               type="button"
               variant="outline"
-              onClick={() => setSettleCustomer(null)}
+              onClick={() => {
+                setSettleCustomer(null);
+                setSettleAmount('');
+                setSettleDiscount('');
+                setSettleNote('');
+              }}
               disabled={isSettling}
             >
               Cancel

@@ -42,15 +42,16 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { CalendarIcon, PlusCircle, Trash2, ScanBarcode, CreditCard, Building2, Calendar as CalendarLucide } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 import { format, addDays } from 'date-fns';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
 import { Badge } from '@/components/ui/badge';
+import { ProductSearchCombobox } from '@/components/products/product-search-combobox';
 
 const purchaseItemSchema = z.object({
   productId: z.string().min(1, "Please select a product"),
-  quantity: z.coerce.number().int().min(1, "Quantity must be at least 1"),
+  quantity: z.coerce.number().min(0.001, "Quantity must be at least 0.001"),
   purchasePrice: z.coerce.number().min(0, "Price must be positive"),
 });
 
@@ -61,6 +62,7 @@ const purchaseSchema = z.object({
   date: z.date({ required_error: 'A date is required.' }),
   paymentStatus: z.enum(['Paid', 'Partial', 'Pending']),
   amountPaid: z.coerce.number().min(0, "Amount paid cannot be negative"),
+  discount: z.coerce.number().min(0, "Discount cannot be negative").optional(),
   dueDate: z.date().optional(),
   paymentNotes: z.string().optional(),
   items: z.array(purchaseItemSchema).min(1, "Please add at least one item."),
@@ -96,6 +98,7 @@ export default function NewPurchasePage() {
       date: new Date(),
       paymentStatus: 'Paid',
       amountPaid: 0,
+      discount: 0,
       dueDate: addDays(new Date(), 15),
       paymentNotes: '',
     },
@@ -130,12 +133,15 @@ export default function NewPurchasePage() {
   const watchedItems = form.watch('items');
   const watchedPaymentStatus = form.watch('paymentStatus');
   const watchedAmountPaid = form.watch('amountPaid') || 0;
+  const watchedDiscount = form.watch('discount') || 0;
 
-  const totalPurchaseAmount = watchedItems.reduce((acc, current) => {
-    return acc + (current.quantity * current.purchasePrice || 0);
-  }, 0);
+  const totalPurchaseAmount = Math.round(
+    watchedItems.reduce((acc, current) => {
+      return acc + ((Number(current.quantity) || 0) * (Number(current.purchasePrice) || 0));
+    }, 0) * 100
+  ) / 100;
 
-  const remainingBalance = Math.max(0, totalPurchaseAmount - watchedAmountPaid);
+  const remainingBalance = Math.max(0, totalPurchaseAmount - watchedAmountPaid - watchedDiscount);
 
   const handleVendorSelect = (vendorId: string) => {
     if (vendorId === 'custom') {
@@ -153,8 +159,11 @@ export default function NewPurchasePage() {
     if (!firestore || !products) return;
 
     try {
-      const finalAmountPaid = data.paymentStatus === 'Paid' ? totalPurchaseAmount : data.amountPaid;
-      const finalPending = Math.max(0, totalPurchaseAmount - finalAmountPaid);
+      const finalDiscount = Number(data.discount) || 0;
+      const finalAmountPaid = data.paymentStatus === 'Paid' 
+        ? Math.max(0, totalPurchaseAmount - finalDiscount) 
+        : data.amountPaid;
+      const finalPending = Math.max(0, totalPurchaseAmount - finalAmountPaid - finalDiscount);
 
       await runTransaction(firestore, async (transaction) => {
         const purchaseRef = doc(collection(firestore, 'purchases'));
@@ -223,6 +232,7 @@ export default function NewPurchasePage() {
           totalAmount: totalPurchaseAmount,
           paymentStatus: data.paymentStatus,
           amountPaid: finalAmountPaid,
+          discount: finalDiscount,
           dueDate: data.dueDate ? data.dueDate.toISOString() : null,
           paymentNotes: data.paymentNotes || '',
         });
@@ -260,13 +270,21 @@ export default function NewPurchasePage() {
   };
 
   const handleProductChange = (index: number, productId: string) => {
+    const currentItem = form.getValues(`items.${index}`);
+    if (!productId) {
+      form.setValue(`items.${index}`, {
+        ...currentItem,
+        productId: '',
+        purchasePrice: 0,
+      });
+      return;
+    }
     const product = products?.find(p => p.id === productId);
     if (product) {
-      const currentItem = form.getValues(`items.${index}`);
       form.setValue(`items.${index}`, {
         ...currentItem,
         productId: productId,
-        purchasePrice: product.purchasePrice,
+        purchasePrice: product.purchasePrice || 0,
       });
     }
   };
@@ -418,18 +436,17 @@ export default function NewPurchasePage() {
                               control={form.control}
                               name={`items.${index}.productId`}
                               render={({ field }) => (
-                                <Select onValueChange={(value) => { field.onChange(value); handleProductChange(index, value); }} defaultValue={field.value} disabled={productsLoading}>
-                                  <FormControl>
-                                    <SelectTrigger>
-                                      <SelectValue placeholder="Select a product" />
-                                    </SelectTrigger>
-                                  </FormControl>
-                                  <SelectContent>
-                                    {products?.map((product) => (
-                                      <SelectItem key={product.id} value={product.id}>{product.productName}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                <ProductSearchCombobox
+                                  products={products || []}
+                                  value={field.value}
+                                  disabled={productsLoading}
+                                  priceType="purchasePrice"
+                                  placeholder="Search & find product..."
+                                  onSelect={(selected) => {
+                                    field.onChange(selected ? selected.id : '');
+                                    handleProductChange(index, selected ? selected.id : '');
+                                  }}
+                                />
                               )}
                             />
                           </TableCell>
@@ -437,18 +454,36 @@ export default function NewPurchasePage() {
                             <Controller
                               control={form.control}
                               name={`items.${index}.quantity`}
-                              render={({ field }) => <Input type="number" min="1" {...field} />}
+                              render={({ field }) => (
+                                <Input
+                                  type="number"
+                                  min="0.001"
+                                  step="any"
+                                  placeholder="1"
+                                  className="font-mono text-xs"
+                                  {...field}
+                                />
+                              )}
                             />
                           </TableCell>
                           <TableCell>
                             <Controller
                               control={form.control}
                               name={`items.${index}.purchasePrice`}
-                              render={({ field }) => <Input type="number" min="0" {...field} />}
+                              render={({ field }) => (
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  placeholder="0.00"
+                                  className="font-mono text-xs"
+                                  {...field}
+                                />
+                              )}
                             />
                           </TableCell>
-                          <TableCell className="font-semibold">
-                            ₹{((watchedItems[index]?.quantity || 0) * (watchedItems[index]?.purchasePrice || 0)).toLocaleString()}
+                          <TableCell className="font-semibold font-mono text-xs">
+                            ₹{formatCurrency((watchedItems[index]?.quantity || 0) * (watchedItems[index]?.purchasePrice || 0))}
                           </TableCell>
                           <TableCell>
                             <Button variant="ghost" size="icon" onClick={() => remove(index)}>
@@ -517,7 +552,14 @@ export default function NewPurchasePage() {
                         <FormItem>
                           <FormLabel>Amount Paid (₹)</FormLabel>
                           <FormControl>
-                            <Input type="number" placeholder="Enter amount paid" {...field} />
+                            <Input
+                              type="number"
+                              min="0"
+                              step="any"
+                              placeholder="0.00"
+                              className="font-mono"
+                              {...field}
+                            />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -562,24 +604,55 @@ export default function NewPurchasePage() {
                     />
                   )}
 
+                  <FormField
+                    control={form.control}
+                    name="discount"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Settlement / Discount Concession (₹)</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="any"
+                            placeholder="0.00"
+                            className="font-mono"
+                            {...field}
+                            onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
                   <div className="pt-2 border-t space-y-2">
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Total Bill Amount:</span>
-                      <span className="font-bold">₹{totalPurchaseAmount.toLocaleString()}</span>
+                      <span className="font-bold font-mono">₹{formatCurrency(totalPurchaseAmount)}</span>
                     </div>
+
+                    {watchedDiscount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Settlement Discount:</span>
+                        <span className="font-semibold text-primary font-mono">
+                          - ₹{formatCurrency(watchedDiscount)}
+                        </span>
+                      </div>
+                    )}
 
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Amount Paid:</span>
-                      <span className="font-semibold text-emerald-600">
-                        ₹{(watchedPaymentStatus === 'Paid' ? totalPurchaseAmount : watchedAmountPaid).toLocaleString()}
+                      <span className="font-semibold text-emerald-600 font-mono">
+                        ₹{formatCurrency(watchedPaymentStatus === 'Paid' ? Math.max(0, totalPurchaseAmount - watchedDiscount) : watchedAmountPaid)}
                       </span>
                     </div>
 
                     {watchedPaymentStatus !== 'Paid' && (
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Pending Balance:</span>
-                        <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/30">
-                          ₹{remainingBalance.toLocaleString()}
+                        <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/30 font-mono">
+                          ₹{formatCurrency(remainingBalance)}
                         </Badge>
                       </div>
                     )}

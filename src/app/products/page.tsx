@@ -65,11 +65,13 @@ import {
 import { PageHeader } from '@/components/page-header';
 import Link from 'next/link';
 import { useCollection, useFirestore, useMemoFirebase, deleteDocumentNonBlocking } from '@/firebase';
-import { collection, doc } from 'firebase/firestore';
-import type { Product } from '@/lib/types';
+import { collection, doc, query, orderBy } from 'firebase/firestore';
+import type { Product, Category } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
 import { Skeleton } from '@/components/ui/skeleton';
+import { CategoryManagerModal } from '@/components/categories/category-manager-modal';
+import { formatCurrency } from '@/lib/utils';
 
 export default function ProductsPage() {
   const firestore = useFirestore();
@@ -82,22 +84,33 @@ export default function ProductsPage() {
   const [sortBy, setSortBy] = useState<string>('name-asc');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [stockFilter, setStockFilter] = useState<string>('all');
+  const [isManageCategoryOpen, setIsManageCategoryOpen] = useState(false);
 
   const productsQuery = useMemoFirebase(
     () => (firestore ? collection(firestore, 'products') : null),
     [firestore]
   );
-  const { data: rawProducts, isLoading } = useCollection<Product>(productsQuery);
+  const { data: rawProducts, isLoading: productsLoading } = useCollection<Product>(productsQuery);
 
-  // Extract unique categories
+  const categoriesQuery = useMemoFirebase(
+    () => (firestore ? query(collection(firestore, 'categories'), orderBy('name')) : null),
+    [firestore]
+  );
+  const { data: dbCategories, isLoading: categoriesLoading } = useCollection<Category>(categoriesQuery);
+
+  const isLoading = productsLoading || categoriesLoading;
+
+  // Extract unique categories (combining database collection and products)
   const categories = useMemo(() => {
-    if (!rawProducts) return [];
     const set = new Set<string>();
-    rawProducts.forEach((p) => {
+    (dbCategories || []).forEach((c) => {
+      if (c.name && c.name.trim()) set.add(c.name.trim());
+    });
+    (rawProducts || []).forEach((p) => {
       if (p.category && p.category.trim()) set.add(p.category.trim());
     });
-    return Array.from(set).sort();
-  }, [rawProducts]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [dbCategories, rawProducts]);
 
   // Key KPI stats
   const { totalItems, lowStockCount, outOfStockCount, totalStockValue } = useMemo(() => {
@@ -232,6 +245,15 @@ export default function ProductsPage() {
         description="Manage your product catalog, prices, categories, and stock quantities."
       >
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsManageCategoryOpen(true)}
+            className="gap-1.5 shadow-sm"
+          >
+            <Tag className="h-4 w-4 text-primary" />
+            Categories
+          </Button>
           <Button variant="outline" size="sm" asChild className="gap-1.5 shadow-sm">
             <Link href="/barcodes">
               <Barcode className="h-4 w-4 text-primary" />
@@ -330,7 +352,7 @@ export default function ProductsPage() {
               <Skeleton className="h-6 w-24" />
             ) : (
               <div className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                ₹{totalStockValue.toLocaleString()}
+                ₹{formatCurrency(totalStockValue)}
               </div>
             )}
           </CardContent>
@@ -597,13 +619,13 @@ export default function ProductsPage() {
 
                       {/* Buying Price (Cost) */}
                       <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                        ₹{(product.purchasePrice || 0).toLocaleString()}
+                        ₹{formatCurrency(product.purchasePrice || 0)}
                       </TableCell>
 
                       {/* Selling Price (MRP) + Margin */}
                       <TableCell className="text-right">
                         <div className="font-bold font-mono text-xs text-foreground">
-                          ₹{product.sellingPrice.toLocaleString()}
+                          ₹{formatCurrency(product.sellingPrice)}
                         </div>
                         {markupPercent !== null && markupPercent > 0 && (
                           <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
@@ -683,6 +705,12 @@ export default function ProductsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Category Manager Modal */}
+      <CategoryManagerModal
+        isOpen={isManageCategoryOpen}
+        onClose={() => setIsManageCategoryOpen(false)}
+      />
     </>
   );
 }

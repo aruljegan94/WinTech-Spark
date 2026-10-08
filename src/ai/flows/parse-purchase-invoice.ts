@@ -38,9 +38,33 @@ const parsePurchaseInvoiceFlow = ai.defineFlow(
   },
   async (input) => {
     try {
-      const { output } = await prompt(input);
+      // Fast and highly available gemini-3.5-flash with fallback to gemini-3.8-flash
+      const candidateModels = ['googleai/gemini-3.5-flash', 'googleai/gemini-3.8-flash'];
+      let output: ParsePurchaseInvoiceOutput | null = null;
+      let lastError: any = null;
+
+      for (const model of candidateModels) {
+        try {
+          const res = await prompt(input, { model });
+          if (res?.output) {
+            output = res.output;
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`[parsePurchaseInvoice] Model ${model} error, attempting fallback:`, err?.message || err);
+          lastError = err;
+          if (
+            err?.message?.includes('leaked') ||
+            err?.message?.includes('403') ||
+            err?.message?.includes('API key not valid')
+          ) {
+            throw err;
+          }
+        }
+      }
+
       if (!output) {
-        throw new Error('Failed to parse purchase invoice document.');
+        throw lastError || new Error('Failed to parse purchase invoice document.');
       }
       return output;
     } catch (err: any) {

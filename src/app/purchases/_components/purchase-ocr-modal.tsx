@@ -43,6 +43,7 @@ import { collection, doc, runTransaction } from 'firebase/firestore';
 import { parsePurchaseInvoice } from '@/ai/flows/parse-purchase-invoice';
 import type { ParsePurchaseInvoiceOutput } from '@/ai/flows/parse-purchase-invoice-types';
 import { format } from 'date-fns';
+import { formatCurrency } from '@/lib/utils';
 
 interface PurchaseOcrModalProps {
   isOpen: boolean;
@@ -145,7 +146,7 @@ export function PurchaseOcrModal({
       const q = Number(current.quantity) || 0;
       const p = Number(current.purchasePrice) || 0;
       const gst = Number(current.gstPercentage) || 0;
-      current.amountWithGst = Math.round(q * p * (1 + gst / 100));
+      current.amountWithGst = Math.round(q * p * (1 + gst / 100) * 100) / 100;
     }
 
     // Check inventory match on name change
@@ -177,7 +178,7 @@ export function PurchaseOcrModal({
     setItems(items.filter((_, i) => i !== index));
   };
 
-  const totalCalculatedAmount = items.reduce((sum, item) => sum + (item.amountWithGst || 0), 0);
+  const totalCalculatedAmount = Math.round(items.reduce((sum, item) => sum + (item.amountWithGst || 0), 0) * 100) / 100;
 
   const handleConfirmPurchase = async () => {
     if (!firestore) return;
@@ -492,19 +493,21 @@ export function PurchaseOcrModal({
                         <TableCell className="px-2">
                           <Input
                             type="number"
-                            min="1"
+                            min="0.001"
+                            step="any"
                             value={item.quantity}
                             onChange={(e) => handleItemChange(idx, 'quantity', e.target.value)}
-                            className="h-8 text-sm text-center w-full min-w-[52px] px-1"
+                            className="h-8 text-sm text-center w-full min-w-[52px] px-1 font-mono"
                           />
                         </TableCell>
                         <TableCell>
                           <Input
                             type="number"
                             min="0"
+                            step="any"
                             value={item.purchasePrice}
                             onChange={(e) => handleItemChange(idx, 'purchasePrice', e.target.value)}
-                            className="h-8 text-xs"
+                            className="h-8 text-xs font-mono"
                           />
                         </TableCell>
                         <TableCell className="px-2">
@@ -512,13 +515,14 @@ export function PurchaseOcrModal({
                             type="number"
                             min="0"
                             max="100"
+                            step="any"
                             value={item.gstPercentage}
                             onChange={(e) => handleItemChange(idx, 'gstPercentage', e.target.value)}
-                            className="h-8 text-sm text-center w-full min-w-[52px] px-1"
+                            className="h-8 text-sm text-center w-full min-w-[52px] px-1 font-mono"
                           />
                         </TableCell>
-                        <TableCell className="text-right font-semibold text-xs">
-                          ₹{item.amountWithGst.toLocaleString()}
+                        <TableCell className="text-right font-semibold text-xs font-mono">
+                          ₹{formatCurrency(item.amountWithGst)}
                         </TableCell>
                         <TableCell className="text-center">
                           {item.matchedProductId ? (
@@ -553,7 +557,7 @@ export function PurchaseOcrModal({
             <div className="flex justify-end p-3 rounded-lg bg-primary/10 border border-primary/20">
               <div className="text-right">
                 <span className="text-xs text-muted-foreground font-medium">Grand Total Purchase Amount:</span>
-                <div className="text-xl font-bold text-primary">₹{totalCalculatedAmount.toLocaleString()}</div>
+                <div className="text-xl font-bold text-primary font-mono">₹{formatCurrency(totalCalculatedAmount)}</div>
               </div>
             </div>
           </div>

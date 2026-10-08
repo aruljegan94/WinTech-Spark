@@ -60,6 +60,7 @@ import { Badge } from '@/components/ui/badge';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { PurchaseOcrModal } from './_components/purchase-ocr-modal';
+import { formatCurrency } from '@/lib/utils';
 
 export default function PurchasesPage() {
   const firestore = useFirestore();
@@ -79,7 +80,9 @@ export default function PurchasesPage() {
   const [editingPaymentPurchase, setEditingPaymentPurchase] = useState<Purchase | null>(null);
   const [payStatus, setPayStatus] = useState<'Paid' | 'Partial' | 'Pending'>('Paid');
   const [payAmount, setPayAmount] = useState('');
+  const [payDiscount, setPayDiscount] = useState('');
   const [payDueDate, setPayDueDate] = useState('');
+  const [payNote, setPayNote] = useState('');
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false);
 
   // Fetch Purchases
@@ -209,18 +212,34 @@ export default function PurchasesPage() {
 
   const openPaymentModal = (purchase: Purchase) => {
     setEditingPaymentPurchase(purchase);
-    setPayStatus(purchase.paymentStatus || (purchase.amountPaid && purchase.amountPaid >= purchase.totalAmount ? 'Paid' : 'Pending'));
-    setPayAmount(String(purchase.amountPaid ?? (purchase.paymentStatus === 'Paid' ? purchase.totalAmount : 0)));
+    const paid = purchase.amountPaid ?? (purchase.paymentStatus === 'Paid' ? purchase.totalAmount : 0);
+    const disc = purchase.discount ?? 0;
+    setPayStatus(purchase.paymentStatus || (paid + disc >= purchase.totalAmount ? 'Paid' : 'Pending'));
+    setPayAmount(String(paid));
+    setPayDiscount(disc > 0 ? String(disc) : '');
     setPayDueDate(purchase.dueDate ? purchase.dueDate.split('T')[0] : '');
+    setPayNote(purchase.paymentNotes || '');
   };
 
   const handleUpdatePayment = async () => {
     if (!firestore || !editingPaymentPurchase) return;
     setIsUpdatingPayment(true);
     try {
-      const numericPaid = payStatus === 'Paid' ? editingPaymentPurchase.totalAmount : Number(payAmount) || 0;
-      const oldPending = Math.max(0, editingPaymentPurchase.totalAmount - (editingPaymentPurchase.amountPaid || 0));
-      const newPending = Math.max(0, editingPaymentPurchase.totalAmount - numericPaid);
+      const numericPaid = Number(payAmount) || 0;
+      const numericDiscount = Number(payDiscount) || 0;
+      const totalCleared = Math.round((numericPaid + numericDiscount) * 100) / 100;
+      const isFullyPaid = payStatus === 'Paid' || totalCleared >= editingPaymentPurchase.totalAmount - 0.01;
+      const finalStatus: Purchase['paymentStatus'] = isFullyPaid ? 'Paid' : (totalCleared > 0 ? 'Partial' : 'Pending');
+
+      const actualPaid = payStatus === 'Paid' && numericPaid === 0
+        ? Math.max(0, editingPaymentPurchase.totalAmount - numericDiscount)
+        : numericPaid;
+
+      const oldPaid = editingPaymentPurchase.amountPaid ?? (editingPaymentPurchase.paymentStatus === 'Paid' ? editingPaymentPurchase.totalAmount : 0);
+      const oldDiscount = editingPaymentPurchase.discount || 0;
+      const oldCleared = oldPaid + oldDiscount;
+      const oldPending = Math.max(0, editingPaymentPurchase.totalAmount - oldCleared);
+      const newPending = Math.max(0, editingPaymentPurchase.totalAmount - (actualPaid + numericDiscount));
       const pendingDiff = newPending - oldPending;
 
       let isoDueDate: string | null = null;
@@ -233,9 +252,11 @@ export default function PurchasesPage() {
 
       const purchaseRef = doc(firestore, 'purchases', editingPaymentPurchase.id);
       await updateDoc(purchaseRef, {
-        paymentStatus: payStatus,
-        amountPaid: numericPaid,
+        paymentStatus: finalStatus,
+        amountPaid: actualPaid,
+        discount: numericDiscount,
         dueDate: isoDueDate,
+        paymentNotes: payNote || '',
       });
 
       // Synchronize with linked vendor
@@ -261,8 +282,10 @@ export default function PurchasesPage() {
       }
 
       toast({
-        title: 'Payment Updated & Synced',
-        description: `Invoice #${editingPaymentPurchase.invoiceNo} marked as ${payStatus}. Vendor balance synced.`,
+        title: 'Payment & Discount Updated',
+        description: `Invoice #${editingPaymentPurchase.invoiceNo} marked as ${finalStatus}${
+          numericDiscount > 0 ? ` with ₹${numericDiscount.toLocaleString()} discount` : ''
+        }. Vendor balance synced.`,
       });
       setEditingPaymentPurchase(null);
     } catch (e: any) {
@@ -610,8 +633,9 @@ export default function PurchasesPage() {
               {!isLoading &&
                 purchases.map((purchase) => {
                   const paid = purchase.amountPaid ?? (purchase.paymentStatus === 'Paid' ? purchase.totalAmount : 0);
+                  const disc = purchase.discount || 0;
                   const total = purchase.totalAmount;
-                  const billDue = Math.max(0, total - paid);
+                  const billDue = Math.max(0, total - paid - disc);
 
                   // Check linked vendor
                   const linkedVendor = purchase.vendorId
@@ -663,10 +687,15 @@ export default function PurchasesPage() {
 
                       <TableCell>
                         <div className="flex flex-col gap-0.5 items-start">
-                          {getStatusBadge(purchase.paymentStatus, paid, total)}
-                          {paid < total && (
-                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
-                              Due: ₹{billDue.toLocaleString()}
+                          {getStatusBadge(purchase.paymentStatus, paid + disc, total)}
+                          {disc > 0 && (
+                            <span className="text-[10px] text-primary font-medium font-mono">
+                              Disc: ₹{formatCurrency(disc)}
+                            </span>
+                          )}
+                          {billDue > 0 && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium font-mono">
+                              Due: ₹{formatCurrency(billDue)}
                             </span>
                           )}
                         </div>
@@ -683,8 +712,8 @@ export default function PurchasesPage() {
                         )}
                       </TableCell>
 
-                      <TableCell className="text-right font-semibold text-xs whitespace-nowrap">
-                        ₹{total.toLocaleString()}
+                      <TableCell className="text-right font-semibold text-xs whitespace-nowrap font-mono">
+                        ₹{formatCurrency(total)}
                       </TableCell>
 
                       <TableCell className="text-right">
@@ -735,50 +764,131 @@ export default function PurchasesPage() {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            <div className="space-y-1">
-              <Label>Payment Status</Label>
-              <Select
-                value={payStatus}
-                onValueChange={(val: any) => {
-                  setPayStatus(val);
-                  if (val === 'Paid' && editingPaymentPurchase) {
-                    setPayAmount(String(editingPaymentPurchase.totalAmount));
-                  }
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Paid">Fully Paid</SelectItem>
-                  <SelectItem value="Partial">Partial Payment</SelectItem>
-                  <SelectItem value="Pending">Pending / Unpaid</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {editingPaymentPurchase && (() => {
+              const totalBill = editingPaymentPurchase.totalAmount || 0;
+              const numericPaid = Number(payAmount) || 0;
+              const numericDiscount = Number(payDiscount) || 0;
+              const totalSettledNow = Math.round((numericPaid + numericDiscount) * 100) / 100;
+              const remainingDue = Math.max(0, Math.round((totalBill - totalSettledNow) * 100) / 100);
+              const diffFromPaid = Math.max(0, Math.round((totalBill - numericPaid) * 100) / 100);
 
-            {payStatus === 'Partial' && (
-              <div className="space-y-1">
-                <Label>Amount Paid (₹)</Label>
-                <Input
-                  type="number"
-                  placeholder="Enter paid amount"
-                  value={payAmount}
-                  onChange={(e) => setPayAmount(e.target.value)}
-                />
-              </div>
-            )}
+              return (
+                <div className="space-y-3">
+                  <div className="bg-muted/40 border rounded-lg p-2.5 text-xs flex justify-between items-center">
+                    <div>
+                      <span className="text-muted-foreground">Total Bill: </span>
+                      <strong className="text-foreground font-bold font-mono">₹{formatCurrency(totalBill)}</strong>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Remaining: </span>
+                      <strong className={remainingDue > 0 ? "text-amber-600 dark:text-amber-400 font-bold font-mono" : "text-emerald-600 font-bold font-mono"}>
+                        ₹{formatCurrency(remainingDue)}
+                      </strong>
+                    </div>
+                  </div>
 
-            {payStatus !== 'Paid' && (
-              <div className="space-y-1">
-                <Label>Payment Due Date (Alert Reminder)</Label>
-                <Input
-                  type="date"
-                  value={payDueDate}
-                  onChange={(e) => setPayDueDate(e.target.value)}
-                />
-              </div>
-            )}
+                  <div className="space-y-1">
+                    <Label className="text-xs">Payment Status</Label>
+                    <Select
+                      value={payStatus}
+                      onValueChange={(val: any) => {
+                        setPayStatus(val);
+                        if (val === 'Paid') {
+                          const disc = Number(payDiscount) || 0;
+                          setPayAmount(String(Math.max(0, Math.round((totalBill - disc) * 100) / 100)));
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="h-9 text-xs">
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Paid">Fully Paid / Settled</SelectItem>
+                        <SelectItem value="Partial">Partial Payment</SelectItem>
+                        <SelectItem value="Pending">Pending / Unpaid</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Amount Paid (₹)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0.00"
+                        className="h-9 text-xs font-mono"
+                        value={payAmount}
+                        onChange={(e) => setPayAmount(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs">Discount / Concession (₹)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0.00"
+                        className="h-9 text-xs font-mono"
+                        value={payDiscount}
+                        onChange={(e) => setPayDiscount(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {diffFromPaid > 0 && numericPaid > 0 && Number(payDiscount || 0) === 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-[11px] h-7 w-full border-dashed text-primary"
+                      onClick={() => setPayDiscount(String(diffFromPaid))}
+                    >
+                      Supplier offered ₹{diffFromPaid.toLocaleString()} discount? Settle full bill
+                    </Button>
+                  )}
+
+                  {/* Live settlement breakdown preview */}
+                  <div className="p-2 rounded-lg bg-primary/5 border border-primary/20 text-[11px] space-y-1">
+                    <div className="flex justify-between font-medium">
+                      <span>Total Cleared Now:</span>
+                      <span className="font-bold text-foreground">
+                        ₹{numericPaid.toLocaleString()} (Paid) + ₹{numericDiscount.toLocaleString()} (Disc) = ₹{totalSettledNow.toLocaleString()}
+                      </span>
+                    </div>
+                    {totalSettledNow >= totalBill - 0.01 && (
+                      <div className="text-emerald-600 dark:text-emerald-400 font-semibold text-[10px]">
+                        ✓ Invoice will be marked as Fully Settled (Paid)
+                      </div>
+                    )}
+                  </div>
+
+                  {remainingDue > 0 && (
+                    <div className="space-y-1">
+                      <Label className="text-xs">Payment Due Date (Reminder)</Label>
+                      <Input
+                        type="date"
+                        className="h-9 text-xs"
+                        value={payDueDate}
+                        onChange={(e) => setPayDueDate(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">Settlement Note (Optional)</Label>
+                    <Input
+                      placeholder="e.g. Cleared via Cheque #1029 or Cash discount"
+                      className="h-9 text-xs"
+                      value={payNote}
+                      onChange={(e) => setPayNote(e.target.value)}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           <DialogFooter>

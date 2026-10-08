@@ -39,6 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { formatCurrency } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 
 export default function EditInvoicePage() {
@@ -161,12 +162,12 @@ export default function EditInvoicePage() {
                   {sale.items.map((item, index) => (
                     <TableRow key={index}>
                       <TableCell>{item.productName}</TableCell>
-                      <TableCell>{item.quantity}</TableCell>
-                      <TableCell className="text-right">
-                        ₹{item.price.toLocaleString()}
+                      <TableCell className="font-mono">{item.quantity}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        ₹{formatCurrency(item.price)}
                       </TableCell>
-                      <TableCell className="text-right">
-                        ₹{item.total.toLocaleString()}
+                      <TableCell className="text-right font-mono font-medium">
+                        ₹{formatCurrency(item.total)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -175,7 +176,7 @@ export default function EditInvoicePage() {
             </CardContent>
              <CardFooter className="justify-end gap-4 border-t bg-muted/50 px-6 py-3">
                 <div className="text-lg font-semibold">Total</div>
-                <div className="text-lg font-bold">₹{sale.total.toLocaleString()}</div>
+                <div className="text-lg font-bold font-mono">₹{formatCurrency(sale.total)}</div>
              </CardFooter>
           </Card>
         </div>
@@ -237,9 +238,11 @@ export default function EditInvoicePage() {
                   <Input
                     id="amount-paid"
                     type="number"
+                    step="any"
                     value={amountPaid}
                     onChange={(e) => setAmountPaid(Number(e.target.value))}
                     max={sale.total}
+                    className="font-mono"
                   />
                 </div>
               )}

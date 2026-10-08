@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/table';
 import { format } from 'date-fns';
 import { notFound } from 'next/navigation';
+import { formatCurrency } from '@/lib/utils';
 
 export default function PurchaseDetailsPage() {
   const firestore = useFirestore();
@@ -104,7 +105,7 @@ export default function PurchaseDetailsPage() {
           <CardHeader>
             <CardTitle>Summary</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-3">
+          <CardContent className="grid gap-4 md:grid-cols-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Supplier</p>
               <p className="font-semibold">{purchase.supplierName}</p>
@@ -122,6 +123,19 @@ export default function PurchaseDetailsPage() {
               <p className="font-semibold">
                 {format(new Date(purchase.date), 'dd-MMM-yyyy')}
               </p>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">
+                Payment Status
+              </p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="font-semibold">{purchase.paymentStatus}</span>
+                {purchase.discount ? (
+                  <span className="text-xs text-primary font-medium font-mono">
+                    (₹{formatCurrency(purchase.discount)} Disc)
+                  </span>
+                ) : null}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -143,12 +157,12 @@ export default function PurchaseDetailsPage() {
                 {(purchase.items || []).map((item, index) => (
                   <TableRow key={index}>
                     <TableCell>{item.productName}</TableCell>
-                    <TableCell className="text-right">{item.quantity}</TableCell>
-                    <TableCell className="text-right">
-                      ₹{item.purchasePrice.toLocaleString()}
+                    <TableCell className="text-right font-mono">{item.quantity}</TableCell>
+                    <TableCell className="text-right font-mono">
+                      ₹{formatCurrency(item.purchasePrice)}
                     </TableCell>
-                    <TableCell className="text-right">
-                      ₹{item.totalAmount.toLocaleString()}
+                    <TableCell className="text-right font-mono">
+                      ₹{formatCurrency(item.totalAmount)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -157,7 +171,7 @@ export default function PurchaseDetailsPage() {
           </CardContent>
            <CardFooter className="flex justify-end gap-4 border-t bg-muted/50 px-6 py-3">
                 <div className="text-lg font-semibold">Total</div>
-                <div className="text-lg font-bold">₹{purchase.totalAmount.toLocaleString()}</div>
+                <div className="text-lg font-bold font-mono">₹{formatCurrency(purchase.totalAmount)}</div>
            </CardFooter>
         </Card>
       </div>

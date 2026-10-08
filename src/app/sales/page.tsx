@@ -61,6 +61,7 @@ import { format, isThisMonth, startOfDay, endOfDay, isWithinInterval, parseISO }
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
+import { formatCurrency } from '@/lib/utils';
 
 export default function SalesPage() {
   const firestore = useFirestore();
@@ -311,7 +312,7 @@ export default function SalesPage() {
                 </div>
             </CardHeader>
             <CardContent className="px-3 pb-2 pt-0">
-                {isLoading ? <Skeleton className="h-7 w-2/3" /> : <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400">₹{totalSalesMonth.toLocaleString()}</div>}
+                {isLoading ? <Skeleton className="h-7 w-2/3" /> : <div className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">₹{formatCurrency(totalSalesMonth)}</div>}
             </CardContent>
         </Card>
 
@@ -323,7 +324,7 @@ export default function SalesPage() {
                 </div>
             </CardHeader>
             <CardContent className="px-3 pb-2 pt-0">
-                 {isLoading ? <Skeleton className="h-7 w-2/3" /> : <div className="text-xl font-bold text-amber-600 dark:text-amber-400">₹{pendingAmountMonth.toLocaleString()}</div>}
+                 {isLoading ? <Skeleton className="h-7 w-2/3" /> : <div className="text-xl font-bold font-mono text-amber-600 dark:text-amber-400">₹{formatCurrency(pendingAmountMonth)}</div>}
             </CardContent>
         </Card>
 
@@ -519,20 +520,20 @@ export default function SalesPage() {
                           {sale.paymentStatus}
                         </Badge>
                         {disc > 0 && (
-                          <Badge variant="outline" className="text-[9px] h-4 px-1 text-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200">
-                            Disc: ₹{disc.toLocaleString()}
+                          <Badge variant="outline" className="text-[9px] h-4 px-1 font-mono text-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200">
+                            Disc: ₹{formatCurrency(disc)}
                           </Badge>
                         )}
                         {sale.paymentStatus !== 'Paid' && due > 0 && (
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
-                            Due: ₹{due.toLocaleString()}
+                          <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400 font-medium">
+                            Due: ₹{formatCurrency(due)}
                           </span>
                         )}
                       </div>
                     </TableCell>
 
                     <TableCell className="text-right font-bold font-mono text-xs whitespace-nowrap">
-                      ₹{sale.total.toLocaleString()}
+                      ₹{formatCurrency(sale.total)}
                     </TableCell>
 
                     <TableCell className="text-right">

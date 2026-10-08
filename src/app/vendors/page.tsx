@@ -35,6 +35,7 @@ import { collection, doc, setDoc, deleteDoc, query, orderBy, writeBatch, updateD
 import type { Vendor, Purchase } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 import Link from 'next/link';
+import { formatCurrency } from '@/lib/utils';
 
 const EMPTY_VENDOR: Omit<Vendor, 'id'> = {
   name: '',
@@ -68,6 +69,7 @@ export default function VendorsPage() {
   // Payment settle dialog state
   const [settleVendor, setSettleVendor] = useState<Vendor | null>(null);
   const [payAmount, setPayAmount] = useState('');
+  const [settleDiscount, setSettleDiscount] = useState('');
   const [autoAllocateInvoices, setAutoAllocateInvoices] = useState(true);
   const [isSettling, setIsSettling] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -126,7 +128,8 @@ export default function VendorsPage() {
         const pPaid = p.amountPaid !== undefined
           ? Number(p.amountPaid)
           : (p.paymentStatus === 'Paid' ? pTotal : 0);
-        const pDue = Math.max(0, pTotal - pPaid);
+        const pDiscount = Number(p.discount) || 0;
+        const pDue = Math.max(0, pTotal - (pPaid + pDiscount));
 
         totalBilled += pTotal;
         totalPaid += pPaid;
@@ -368,8 +371,16 @@ export default function VendorsPage() {
   const handleSettlePayment = async () => {
     if (!firestore || !settleVendor) return;
     const amountPaid = Number(payAmount) || 0;
-    if (amountPaid <= 0) {
-      toast({ variant: 'destructive', title: 'Enter a valid payment amount.' });
+    const discountAmount = Number(settleDiscount) || 0;
+    const totalSettled = Math.round((amountPaid + discountAmount) * 100) / 100;
+
+    if (totalSettled <= 0) {
+      toast({ variant: 'destructive', title: 'Enter a valid payment or discount amount.' });
+      return;
+    }
+
+    if (amountPaid < 0 || discountAmount < 0) {
+      toast({ variant: 'destructive', title: 'Amounts cannot be negative.' });
       return;
     }
 
@@ -377,43 +388,50 @@ export default function VendorsPage() {
     try {
       const metrics = vendorMetricsMap.get(settleVendor.id);
       const currentDue = metrics ? metrics.effectiveDue : (settleVendor.pendingAmount || 0);
-      const newPending = Math.max(0, currentDue - amountPaid);
+      const newPending = Math.max(0, Math.round((currentDue - totalSettled) * 100) / 100);
 
       const batch = writeBatch(firestore);
 
-      // If auto-allocating to purchases, distribute payment to oldest unpaid invoices (FIFO)
+      // If auto-allocating to purchases, distribute payment and discount to oldest unpaid invoices (FIFO)
       if (autoAllocateInvoices && metrics && metrics.purchases.length > 0) {
         // Sort purchases chronologically (oldest first)
         const unpaidPurchases = [...metrics.purchases]
           .filter((p) => {
             const paid = p.amountPaid !== undefined ? Number(p.amountPaid) : (p.paymentStatus === 'Paid' ? p.totalAmount : 0);
-            return paid < p.totalAmount;
+            const disc = Number(p.discount) || 0;
+            return (paid + disc) < p.totalAmount - 0.01;
           })
           .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-        let remainingToDistribute = amountPaid;
+        let remainingPay = amountPaid;
+        let remainingDiscount = discountAmount;
 
         for (const p of unpaidPurchases) {
-          if (remainingToDistribute <= 0) break;
+          if (remainingPay <= 0 && remainingDiscount <= 0) break;
           const currentPaid = p.amountPaid !== undefined ? Number(p.amountPaid) : (p.paymentStatus === 'Paid' ? p.totalAmount : 0);
-          const pDue = p.totalAmount - currentPaid;
+          const currentDiscount = Number(p.discount) || 0;
+          const pDue = Math.max(0, Math.round((p.totalAmount - (currentPaid + currentDiscount)) * 100) / 100);
 
-          if (remainingToDistribute >= pDue) {
-            // Fully pay this purchase
-            batch.update(doc(firestore, 'purchases', p.id), {
-              amountPaid: p.totalAmount,
-              paymentStatus: 'Paid',
-            });
-            remainingToDistribute -= pDue;
-          } else {
-            // Partially pay this purchase
-            const newPaid = currentPaid + remainingToDistribute;
-            batch.update(doc(firestore, 'purchases', p.id), {
-              amountPaid: newPaid,
-              paymentStatus: 'Partial',
-            });
-            remainingToDistribute = 0;
-          }
+          if (pDue <= 0) continue;
+
+          // Allocate cash payment first
+          const payToApply = Math.min(remainingPay, pDue);
+          remainingPay = Math.round((remainingPay - payToApply) * 100) / 100;
+
+          // Allocate discount waiver next to any remaining balance on this bill
+          const dueAfterPay = Math.max(0, Math.round((pDue - payToApply) * 100) / 100);
+          const discToApply = Math.min(remainingDiscount, dueAfterPay);
+          remainingDiscount = Math.round((remainingDiscount - discToApply) * 100) / 100;
+
+          const newPaid = Math.round((currentPaid + payToApply) * 100) / 100;
+          const newDiscount = Math.round((currentDiscount + discToApply) * 100) / 100;
+          const isCleared = (newPaid + newDiscount) >= p.totalAmount - 0.01;
+
+          batch.update(doc(firestore, 'purchases', p.id), {
+            amountPaid: newPaid,
+            discount: newDiscount,
+            paymentStatus: isCleared ? 'Paid' : (newPaid > 0 ? 'Partial' : p.paymentStatus),
+          });
         }
       }
 
@@ -424,12 +442,19 @@ export default function VendorsPage() {
 
       await batch.commit();
 
+      let desc = `Paid ₹${amountPaid.toLocaleString()}`;
+      if (discountAmount > 0) {
+        desc += ` + ₹${discountAmount.toLocaleString()} discount waiver`;
+      }
+      desc += ` to ${settleVendor.companyName}. Remaining due: ₹${newPending.toLocaleString()}.`;
+
       toast({
-        title: 'Payment Recorded & Synced',
-        description: `Paid ₹${amountPaid.toLocaleString()} to ${settleVendor.companyName}. Remaining due: ₹${newPending.toLocaleString()}.`,
+        title: 'Payment & Discount Recorded',
+        description: desc,
       });
       setSettleVendor(null);
       setPayAmount('');
+      setSettleDiscount('');
     } catch (e: any) {
       toast({ variant: 'destructive', title: 'Payment Error', description: e.message });
     } finally {
@@ -1012,9 +1037,12 @@ export default function VendorsPage() {
               <Label>Opening / Pending Balance (₹)</Label>
               <Input
                 type="number"
-                placeholder="0"
+                step="any"
+                min="0"
+                placeholder="0.00"
                 value={form.pendingAmount || ''}
-                onChange={(e) => setForm((p) => ({ ...p, pendingAmount: Number(e.target.value) }))}
+                onChange={(e) => setForm((p) => ({ ...p, pendingAmount: parseFloat(e.target.value) || 0 }))}
+                className="font-mono"
               />
               <span className="text-[10px] text-muted-foreground">
                 Will also sync with any recorded purchase bills
@@ -1054,7 +1082,16 @@ export default function VendorsPage() {
       </Dialog>
 
       {/* Settle Payment Dialog */}
-      <Dialog open={!!settleVendor} onOpenChange={(open) => !open && setSettleVendor(null)}>
+      <Dialog
+        open={!!settleVendor}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSettleVendor(null);
+            setPayAmount('');
+            setSettleDiscount('');
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1087,36 +1124,114 @@ export default function VendorsPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <Label>Payment Amount to Settle (₹) *</Label>
+                  <Label>Payment Amount to Settle (₹)</Label>
                   <Input
                     type="number"
-                    placeholder="Enter amount paid"
+                    step="any"
+                    min="0"
+                    placeholder="0.00"
                     value={payAmount}
                     onChange={(e) => setPayAmount(e.target.value)}
+                    className="font-mono"
                   />
                   <div className="flex gap-2 mt-1">
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="text-xs h-6 px-2"
-                      onClick={() => setPayAmount(String(currentDue))}
+                      className="text-xs h-6 px-2 font-mono"
+                      onClick={() => {
+                        setPayAmount(String(currentDue));
+                        setSettleDiscount('');
+                      }}
                     >
-                      Pay Full Due (₹{currentDue.toLocaleString()})
+                      Pay Full Due (₹{formatCurrency(currentDue)})
                     </Button>
                     {currentDue > 0 && (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="text-xs h-6 px-2"
-                        onClick={() => setPayAmount(String(Math.round(currentDue / 2)))}
+                        className="text-xs h-6 px-2 font-mono"
+                        onClick={() => {
+                          setPayAmount(String(Math.round((currentDue / 2) * 100) / 100));
+                          setSettleDiscount('');
+                        }}
                       >
-                        50% (₹{Math.round(currentDue / 2).toLocaleString()})
+                        50% (₹{formatCurrency(Math.round((currentDue / 2) * 100) / 100)})
                       </Button>
                     )}
                   </div>
                 </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label>Settlement Discount / Waiver (₹)</Label>
+                    <span className="text-[11px] text-muted-foreground">Supplier concession / Round-off</span>
+                  </div>
+                  <Input
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder="0.00"
+                    value={settleDiscount}
+                    onChange={(e) => setSettleDiscount(e.target.value)}
+                    className="font-mono"
+                  />
+                  {currentDue > (Number(payAmount) || 0) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs h-6 px-2 text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 font-mono"
+                      onClick={() => {
+                        const paid = Number(payAmount) || 0;
+                        const diff = Math.round(Math.max(0, currentDue - paid) * 100) / 100;
+                        setSettleDiscount(String(diff));
+                      }}
+                    >
+                      Apply remaining ₹{formatCurrency(Math.round(Math.max(0, currentDue - (Number(payAmount) || 0)) * 100) / 100)} as Discount
+                    </Button>
+                  )}
+                </div>
+
+                {/* Live Settlement Breakdown */}
+                {(() => {
+                  const numPaid = Number(payAmount) || 0;
+                  const numDisc = Number(settleDiscount) || 0;
+                  const totalSettled = Math.round((numPaid + numDisc) * 100) / 100;
+                  const remaining = Math.max(0, Math.round((currentDue - totalSettled) * 100) / 100);
+
+                  if (totalSettled > 0) {
+                    return (
+                      <div className="bg-muted/50 rounded-lg p-3 text-xs border space-y-1.5">
+                        <div className="flex justify-between text-muted-foreground">
+                          <span>Amount Paid:</span>
+                          <span className="font-semibold font-mono text-foreground">₹{formatCurrency(numPaid)}</span>
+                        </div>
+                        {numDisc > 0 && (
+                          <div className="flex justify-between text-muted-foreground">
+                            <span>Discount / Waiver:</span>
+                            <span className="font-semibold font-mono text-emerald-600 dark:text-emerald-400">
+                              - ₹{formatCurrency(numDisc)}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex justify-between font-medium pt-1 border-t">
+                          <span>Total Cleared / Settled:</span>
+                          <span className="font-bold font-mono text-primary">₹{formatCurrency(totalSettled)}</span>
+                        </div>
+                        <div className="flex justify-between text-[11px]">
+                          <span className="text-muted-foreground">Remaining Balance Due:</span>
+                          <span className={`font-mono ${remaining === 0 ? "font-bold text-emerald-600" : "font-semibold text-amber-600"}`}>
+                            {remaining === 0 ? "Fully Cleared (₹0.00)" : `₹${formatCurrency(remaining)}`}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {metrics && metrics.purchasesCount > 0 && (
                   <div className="flex items-start space-x-2 pt-1 border-t">
@@ -1130,7 +1245,7 @@ export default function VendorsPage() {
                         htmlFor="auto-allocate"
                         className="text-xs font-medium cursor-pointer"
                       >
-                        Auto-allocate payment to oldest purchase invoices (FIFO)
+                        Auto-allocate payment & discount to oldest purchase invoices (FIFO)
                       </label>
                       <p className="text-[11px] text-muted-foreground">
                         Keeps the Purchases page in complete sync by updating individual bills to Paid / Partial.
@@ -1143,7 +1258,14 @@ export default function VendorsPage() {
           })()}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSettleVendor(null)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSettleVendor(null);
+                setPayAmount('');
+                setSettleDiscount('');
+              }}
+            >
               Cancel
             </Button>
             <Button onClick={handleSettlePayment} disabled={isSettling} className="gap-1.5 bg-primary">

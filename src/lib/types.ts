@@ -12,6 +12,12 @@ export type Product = {
   markupPercentage?: number;
 };
 
+export type Category = {
+  id: string;
+  name: string;
+  createdAt?: string;
+};
+
 export type Vendor = {
   id: string;
   name: string;
@@ -45,6 +51,7 @@ export type Purchase = {
   totalAmount: number;
   paymentStatus: 'Paid' | 'Partial' | 'Pending';
   amountPaid: number;
+  discount?: number;
   dueDate?: string; // ISO or YYYY-MM-DD string
   paymentNotes?: string;
 };

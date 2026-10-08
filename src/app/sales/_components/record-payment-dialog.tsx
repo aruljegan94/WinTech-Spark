@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
+import { formatCurrency } from '@/lib/utils';
 
 interface RecordPaymentDialogProps {
   isOpen: boolean;
@@ -298,7 +299,7 @@ export function RecordPaymentDialog({
                     onClick={handlePayFull}
                     className="h-6 px-2 text-[11px] text-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200"
                   >
-                    Pay Full (₹{balanceDue.toLocaleString()})
+                    Pay Full (₹{formatCurrency(balanceDue)})
                   </Button>
                   {balanceDue > 100 && (
                     <Button
@@ -318,7 +319,7 @@ export function RecordPaymentDialog({
                 <Input
                   id="payment-amount"
                   type="number"
-                  step="0.01"
+                  step="any"
                   min="0"
                   max={balanceDue}
                   value={paymentAmount}
@@ -349,7 +350,7 @@ export function RecordPaymentDialog({
                 <Input
                   id="discount-amount"
                   type="number"
-                  step="0.01"
+                  step="any"
                   min="0"
                   max={balanceDue}
                   value={discountAmount}
@@ -370,7 +371,7 @@ export function RecordPaymentDialog({
                     className="w-full h-7 text-[11px] gap-1.5 border-dashed border-indigo-400 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100/60 dark:hover:bg-indigo-950/60 font-semibold"
                   >
                     <Sparkles className="h-3 w-3 text-indigo-600" />
-                    Customer paying ₹{parsedAmount.toLocaleString()}? Apply ₹{bargainDifference.toLocaleString()} as Bargain Discount & Settle Full
+                    Customer paying ₹{formatCurrency(parsedAmount)}? Apply ₹{formatCurrency(bargainDifference)} as Bargain Discount & Settle Full
                   </Button>
                 </div>
               )}
@@ -385,14 +386,14 @@ export function RecordPaymentDialog({
               <div className="flex justify-between items-center font-medium">
                 <span className="text-muted-foreground">Total Bill Cleared Now:</span>
                 <span className="font-mono font-bold text-foreground">
-                  ₹{parsedAmount.toLocaleString()} (Paid) + ₹{parsedDiscount.toLocaleString()} (Disc) = ₹{totalSettledNow.toLocaleString()}
+                  ₹{formatCurrency(parsedAmount)} (Paid) + ₹{formatCurrency(parsedDiscount)} (Disc) = ₹{formatCurrency(totalSettledNow)}
                 </span>
               </div>
               <div className="flex justify-between items-center mt-1 pt-1 border-t border-border/60">
                 <span className="text-muted-foreground">Remaining Invoice Due:</span>
                 <div className="flex items-center gap-1.5">
                   <span className={`font-mono font-bold ${remainingAfterPayment === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                    ₹{remainingAfterPayment.toLocaleString()}
+                    ₹{formatCurrency(remainingAfterPayment)}
                   </span>
                   {willBeFullySettled ? (
                     <Badge className="bg-emerald-600 text-white text-[10px] h-4 px-1.5 gap-0.5 font-bold">
@@ -505,8 +506,8 @@ export function RecordPaymentDialog({
                 <>
                   <CheckCircle2 className="h-4 w-4" />
                   {willBeFullySettled
-                    ? `Settle Full Bill (₹${totalSettledNow.toLocaleString()})`
-                    : `Record Payment (₹${totalSettledNow.toLocaleString()})`}
+                    ? `Settle Full Bill (₹${formatCurrency(totalSettledNow)})`
+                    : `Record Payment (₹${formatCurrency(totalSettledNow)})`}
                 </>
               )}
             </Button>

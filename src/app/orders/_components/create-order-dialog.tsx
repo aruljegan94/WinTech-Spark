@@ -505,10 +505,11 @@ export function CreateOrderDialog({
                 <Label className="text-[11px] font-medium">Quantity</Label>
                 <Input
                   type="number"
-                  min="1"
+                  min="0.001"
+                  step="any"
                   value={itemQuantity}
                   onChange={(e) => setItemQuantity(e.target.value)}
-                  className="h-8 text-xs text-right bg-background"
+                  className="h-8 text-xs text-right bg-background font-mono"
                 />
               </div>
 
@@ -517,10 +518,12 @@ export function CreateOrderDialog({
                 <Label className="text-[11px] font-medium">Est. Unit Price (₹)</Label>
                 <Input
                   type="number"
+                  min="0"
+                  step="any"
                   placeholder="0.00"
                   value={itemPrice}
                   onChange={(e) => setItemPrice(e.target.value)}
-                  className="h-8 text-xs text-right bg-background"
+                  className="h-8 text-xs text-right bg-background font-mono"
                 />
               </div>
             </div>

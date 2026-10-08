@@ -32,13 +32,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ScanBarcode, Package } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
 import { ProductPricingCard } from '@/components/products/product-pricing-card';
+import { CategorySelectField } from '@/components/categories/category-select-field';
 
 const productSchema = z.object({
   productName: z.string().min(1, 'Product name is required'),
   category: z.string().min(1, 'Category is required'),
   purchasePrice: z.coerce.number().min(0, 'Purchase price must be positive'),
   sellingPrice: z.coerce.number().min(0, 'Selling price must be positive'),
-  stockQuantity: z.coerce.number().int().min(0, 'Stock must be a whole number'),
+  stockQuantity: z.coerce.number().min(0, 'Stock must be positive'),
   gstPercentage: z.coerce.number().min(0).max(100, 'GST must be between 0 and 100'),
   barcode: z.string().optional(),
   markupPercentage: z.coerce.number().optional(),
@@ -190,7 +191,11 @@ export default function EditProductPage() {
                   <FormItem>
                     <FormLabel>Category *</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., Lubricants" {...field} />
+                      <CategorySelectField
+                        value={field.value}
+                        onChange={field.onChange}
+                        placeholder="Select category..."
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -232,7 +237,7 @@ export default function EditProductPage() {
                   <FormItem>
                     <FormLabel>Current Stock Quantity</FormLabel>
                     <FormControl>
-                      <Input type="number" min="0" {...field} />
+                      <Input type="number" min="0" step="any" className="font-mono" {...field} />
                     </FormControl>
                     <FormDescription>
                       The current number of units in stock.

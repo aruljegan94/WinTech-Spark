@@ -98,7 +98,7 @@ const generateInvoiceImageFlow = ai.defineFlow(
   },
   async (input) => {
     const { media, usage } = await ai.generate({
-        model: 'googleai/gemini-2.5-flash-image-preview',
+        model: 'googleai/gemini-3.1-flash-image',
         prompt: await prompt.render(input),
         config: {
             responseModalities: ['IMAGE'],

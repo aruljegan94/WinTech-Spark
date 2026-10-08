@@ -180,7 +180,7 @@ export function ExpenseDialog({ isOpen, onOpenChange, expense }: ExpenseDialogPr
                   <FormItem>
                     <FormLabel>Amount (₹)</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="0.00" {...field} />
+                      <Input type="number" step="any" min="0" placeholder="0.00" className="font-mono" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
