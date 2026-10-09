@@ -80,6 +80,11 @@ export function calculateReceiptHeightMm(sale: Sale, is3Inch: boolean): number {
   // Totals section (Subtotal, GST, TOTAL box, Payment Mode, Status)
   heightMm += 32;
 
+  const discountAmount = Number(sale.discount) || 0;
+  if (discountAmount > 0) {
+    heightMm += 5; // Discount line
+  }
+
   const total = Number(sale.total) || 0;
   const amountPaid = Number(sale.amountPaid) || 0;
   if (amountPaid > 0 && amountPaid < total) {
@@ -254,6 +259,11 @@ export function buildEscPosReceipt(
   printRow('Subtotal:', `Rs. ${fmtCurrency(sale.subtotal || 0)}`);
   printRow('GST:', `Rs. ${fmtCurrency(sale.gstAmount || 0)}`);
 
+  const discAmt = Number(sale.discount) || 0;
+  if (discAmt > 0) {
+    printRow('Discount:', `-Rs. ${fmtCurrency(discAmt)}`);
+  }
+
   // Bold Total
   add(0x1b, 0x45, 0x01); // Bold ON
   printRow('TOTAL:', `Rs. ${fmtCurrency(sale.total || 0)}`);
@@ -264,10 +274,6 @@ export function buildEscPosReceipt(
 
   const totalAmt = Number(sale.total) || 0;
   const paidAmt = Number(sale.amountPaid) || 0;
-  const discAmt = Number(sale.discount) || 0;
-  if (discAmt > 0) {
-    printRow('Discount:', `Rs. ${fmtCurrency(discAmt)}`);
-  }
   const balAmt = Math.max(0, totalAmt - paidAmt - discAmt);
   if (paidAmt > 0 && balAmt > 0.01) {
     printRow('Paid:', `Rs. ${fmtCurrency(paidAmt)}`);
@@ -577,6 +583,13 @@ export function printReceiptViaIframe(
 
     <div class="row"><span>Subtotal:</span><span>Rs. ${fmtCurrency(sale.subtotal || 0)}</span></div>
     <div class="row"><span>GST:</span><span>Rs. ${fmtCurrency(sale.gstAmount || 0)}</span></div>
+    ${
+      discountAmount > 0
+        ? `
+      <div class="row"><span>Discount:</span><span>-Rs. ${fmtCurrency(discountAmount)}</span></div>
+    `
+        : ''
+    }
 
     <div class="total-box">
       <span>TOTAL:</span>
@@ -585,13 +598,6 @@ export function printReceiptViaIframe(
 
     <div class="row"><span>Payment Mode:</span><span>${sale.paymentMode || 'Cash'}</span></div>
     <div class="row"><span>Payment Status:</span><span class="bold">${(sale.paymentStatus || 'Paid').toUpperCase()}</span></div>
-    ${
-      discountAmount > 0
-        ? `
-      <div class="row"><span>Discount / Concession:</span><span>Rs. ${fmtCurrency(discountAmount)}</span></div>
-    `
-        : ''
-    }
     ${
       paidAmount > 0 && balance > 0.01
         ? `

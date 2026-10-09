@@ -312,14 +312,20 @@ export default function NewInvoicePage() {
 
 
   const categories = useMemo(() => {
-    if (!products) return [];
-    return ['all', ...Array.from(new Set(products.map(p => p.category)))];
+    if (!products) return ['all'];
+    const set = new Set<string>();
+    products.forEach((p) => {
+      if (p.category && typeof p.category === 'string' && p.category.trim()) {
+        set.add(p.category.trim());
+      }
+    });
+    return ['all', ...Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))];
   }, [products]);
 
   const filteredProducts = useMemo(() => {
     if (!products) return [];
     if (selectedCategory === 'all') return products;
-    return products.filter(p => p.category === selectedCategory);
+    return products.filter(p => (p.category || '').trim().toLowerCase() === selectedCategory.toLowerCase());
   }, [products, selectedCategory]);
 
   const itemForm = useForm<SaleItemFormValues>({
@@ -830,8 +836,10 @@ export default function NewInvoicePage() {
                                 <SelectValue placeholder="Select category" />
                             </SelectTrigger>
                             <SelectContent>
-                                {categories.map(cat => (
-                                    <SelectItem key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</SelectItem>
+                                {categories
+                                    .filter((cat) => Boolean(cat && cat.trim()))
+                                    .map(cat => (
+                                        <SelectItem key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</SelectItem>
                                 ))}
                             </SelectContent>
                         </Select>

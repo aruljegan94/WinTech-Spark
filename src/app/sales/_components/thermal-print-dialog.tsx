@@ -141,7 +141,8 @@ export function ThermalPrintDialog({
   const formattedDate = sale.date ? format(new Date(sale.date), 'dd-MMM-yyyy hh:mm a') : '';
   const total = Number(sale.total) || 0;
   const paidAmount = Number(sale.amountPaid) || 0;
-  const balance = Math.max(0, total - paidAmount);
+  const discountAmount = Number(sale.discount) || 0;
+  const balance = Math.max(0, total - paidAmount - discountAmount);
   const isWebSerialAvail = isWebSerialSupported();
 
   return (
@@ -332,6 +333,12 @@ export function ThermalPrintDialog({
                 <span>GST:</span>
                 <span>₹{(sale.gstAmount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
               </div>
+              {discountAmount > 0 && (
+                <div className="flex justify-between">
+                  <span>Discount:</span>
+                  <span>-₹{discountAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                </div>
+              )}
               <div className="flex justify-between font-bold border-t border-b border-black py-1 my-1 text-xs">
                 <span>TOTAL:</span>
                 <span>₹{(sale.total || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
