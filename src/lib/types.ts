@@ -288,10 +288,32 @@ export type SettlementChecklistRecord = {
   upiVariance: number;
   totalExpenses: number;
   pendingReceivables: number;
+  serviceTotal?: number;
+  serviceSettled?: number;
+  servicePending?: number;
   checks: Record<string, boolean>;
   notes?: string;
   lackingNotes?: string;
   updatedAt: string;
+};
+
+export type ServiceSettlementRecord = {
+  id: string; // e.g. `${saleId}_${itemIndex}`
+  saleId: string;
+  invoiceNumber: string;
+  date: string; // ISO string
+  customerName?: string;
+  customerMobile?: string;
+  productId: string;
+  productName: string;
+  quantity: number;
+  price: number;
+  total: number;
+  status: 'Settled' | 'Pending';
+  settledAt?: string;
+  settledBy?: string;
+  notes?: string;
+  updatedAt?: string;
 };
 
 export type MechanicCommissionRecord = {

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Table,
   TableBody,
@@ -21,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import {
   FileText,
   Upload,
@@ -35,10 +36,14 @@ import {
   PackagePlus,
   AlertCircle,
   ExternalLink,
+  Barcode,
+  Tag,
+  Receipt,
+  Info,
 } from 'lucide-react';
 import type { Product } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
-import { useFirestore, addDocumentNonBlocking } from '@/firebase';
+import { useFirestore } from '@/firebase';
 import { collection, doc, runTransaction } from 'firebase/firestore';
 import { parsePurchaseInvoice } from '@/ai/flows/parse-purchase-invoice';
 import type { ParsePurchaseInvoiceOutput } from '@/ai/flows/parse-purchase-invoice-types';
@@ -52,6 +57,19 @@ interface PurchaseOcrModalProps {
   onPurchaseRecorded?: () => void;
 }
 
+export interface PurchaseOcrItem {
+  productName: string;
+  partNumber: string; // SKU / Barcode / Item code
+  quantity: number;
+  purchasePrice: number; // Unit rate from bill
+  gstPercentage: number;
+  mrp?: number; // Extracted MRP
+  sellingPrice: number; // Selling price (from MRP or markup)
+  amountWithGst: number;
+  matchedProductId?: string;
+  matchedBy?: 'barcode' | 'name';
+}
+
 export function PurchaseOcrModal({
   isOpen,
   onOpenChange,
@@ -62,25 +80,39 @@ export function PurchaseOcrModal({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [ocrError, setOcrError] = useState<string | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string>('');
+  const [, setPreviewUrl] = useState<string>('');
 
   const [supplierName, setSupplierName] = useState('');
   const [invoiceNo, setInvoiceNo] = useState('');
   const [purchaseDate, setPurchaseDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [items, setItems] = useState<
-    Array<{
-      productName: string;
-      quantity: number;
-      purchasePrice: number;
-      gstPercentage: number;
-      amountWithGst: number;
-      matchedProductId?: string;
-    }>
-  >([]);
+  const [isGstIncluded, setIsGstIncluded] = useState<boolean>(false);
+  const [items, setItems] = useState<PurchaseOcrItem[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const firestore = useFirestore();
   const { toast } = useToast();
+
+  const calculateItemTotal = (quantity: number, price: number, gst: number, gstIncluded: boolean) => {
+    const q = Number(quantity) || 0;
+    const p = Number(price) || 0;
+    const g = Number(gst) || 0;
+    if (gstIncluded) {
+      // Rates printed on invoice already include GST
+      return Math.round(q * p * 100) / 100;
+    } else {
+      // GST is calculated on top
+      return Math.round(q * p * (1 + g / 100) * 100) / 100;
+    }
+  };
+
+  const getBasePurchasePrice = (unitPrice: number, gst: number, gstIncluded: boolean) => {
+    const p = Number(unitPrice) || 0;
+    const g = Number(gst) || 0;
+    if (gstIncluded && g > 0) {
+      return Math.round((p / (1 + g / 100)) * 100) / 100;
+    }
+    return p;
+  };
 
   const handleFileUpload = async (file: File) => {
     if (!file) return;
@@ -99,18 +131,58 @@ export function PurchaseOcrModal({
         setInvoiceNo(result.invoiceNo || '');
         setPurchaseDate(result.date || format(new Date(), 'yyyy-MM-dd'));
 
-        // Match items with existing inventory products
-        const processedItems = (result.items || []).map((item) => {
-          const matched = products.find(
-            (p) => p.productName.toLowerCase().trim() === item.productName.toLowerCase().trim()
-          );
+        const detectedGstIncluded = Boolean(result.isGstIncluded);
+        setIsGstIncluded(detectedGstIncluded);
+
+        // Match items with existing inventory products (by Part No / Barcode first, then by Name)
+        const processedItems: PurchaseOcrItem[] = (result.items || []).map((item) => {
+          const partNo = (item.partNumber || '').trim();
+          const name = (item.productName || '').trim();
+
+          let matched = partNo
+            ? products.find(
+                (p) =>
+                  p.barcode &&
+                  p.barcode.trim().toLowerCase() === partNo.toLowerCase()
+              )
+            : undefined;
+          let matchedBy: 'barcode' | 'name' | undefined = matched ? 'barcode' : undefined;
+
+          if (!matched && name) {
+            matched = products.find(
+              (p) => p.productName.toLowerCase().trim() === name.toLowerCase()
+            );
+            if (matched) matchedBy = 'name';
+          }
+
+          const unitPrice = item.purchasePrice || 0;
+          const gst = item.gstPercentage ?? 18;
+          const lineTotal =
+            item.amountWithGst ||
+            calculateItemTotal(item.quantity || 1, unitPrice, gst, detectedGstIncluded);
+
+          // If MRP is available, consider as selling price!
+          let sellingPrice: number;
+          if (typeof item.mrp === 'number' && item.mrp > 0) {
+            sellingPrice = item.mrp;
+          } else if (matched?.sellingPrice) {
+            sellingPrice = matched.sellingPrice;
+          } else {
+            const baseCost = getBasePurchasePrice(unitPrice, gst, detectedGstIncluded);
+            sellingPrice = Math.round(baseCost * 1.25);
+          }
+
           return {
             productName: item.productName || 'Unspecified Part',
+            partNumber: partNo,
             quantity: item.quantity || 1,
-            purchasePrice: item.purchasePrice || 0,
-            gstPercentage: item.gstPercentage || 18,
-            amountWithGst: item.amountWithGst || item.quantity * item.purchasePrice * 1.18,
+            purchasePrice: unitPrice,
+            gstPercentage: gst,
+            mrp: item.mrp,
+            sellingPrice,
+            amountWithGst: lineTotal,
             matchedProductId: matched?.id,
+            matchedBy,
           };
         });
 
@@ -118,7 +190,9 @@ export function PurchaseOcrModal({
         setStep('verify');
         toast({
           title: 'Invoice Parsed with AI OCR!',
-          description: 'Review and edit extracted invoice values before confirming.',
+          description: detectedGstIncluded
+            ? 'Detected GST-inclusive rates. Part numbers and MRP selling prices extracted.'
+            : 'Extracted invoice items, part numbers, and rates. Review before confirming.',
         });
       } catch (error: any) {
         console.error('OCR Parsing Error:', error);
@@ -137,7 +211,31 @@ export function PurchaseOcrModal({
     reader.readAsDataURL(file);
   };
 
-  const handleItemChange = (index: number, field: string, value: any) => {
+  const handleToggleGstIncluded = (checked: boolean) => {
+    setIsGstIncluded(checked);
+    setItems((prevItems) =>
+      prevItems.map((item) => {
+        const newTotal = calculateItemTotal(
+          item.quantity,
+          item.purchasePrice,
+          item.gstPercentage,
+          checked
+        );
+        let newSelling = item.sellingPrice;
+        if (!item.mrp) {
+          const baseCost = getBasePurchasePrice(item.purchasePrice, item.gstPercentage, checked);
+          newSelling = Math.round(baseCost * 1.25);
+        }
+        return {
+          ...item,
+          amountWithGst: newTotal,
+          sellingPrice: newSelling,
+        };
+      })
+    );
+  };
+
+  const handleItemChange = (index: number, field: keyof PurchaseOcrItem, value: any) => {
     const updated = [...items];
     const current = { ...updated[index], [field]: value };
 
@@ -146,15 +244,39 @@ export function PurchaseOcrModal({
       const q = Number(current.quantity) || 0;
       const p = Number(current.purchasePrice) || 0;
       const gst = Number(current.gstPercentage) || 0;
-      current.amountWithGst = Math.round(q * p * (1 + gst / 100) * 100) / 100;
+      current.amountWithGst = calculateItemTotal(q, p, gst, isGstIncluded);
+
+      // If no MRP set, auto-update default selling price
+      if (!current.mrp) {
+        const baseCost = getBasePurchasePrice(p, gst, isGstIncluded);
+        current.sellingPrice = Math.round(baseCost * 1.25);
+      }
     }
 
-    // Check inventory match on name change
-    if (field === 'productName') {
-      const matched = products.find(
-        (p) => p.productName.toLowerCase().trim() === String(value).toLowerCase().trim()
-      );
+    if (field === 'mrp') {
+      const mrpNum = Number(value);
+      if (!isNaN(mrpNum) && mrpNum > 0) {
+        current.sellingPrice = mrpNum;
+      }
+    }
+
+    // Check inventory match on part number or name change
+    if (field === 'partNumber' || field === 'productName') {
+      const partNo = field === 'partNumber' ? String(value).trim() : current.partNumber.trim();
+      const name = field === 'productName' ? String(value).trim() : current.productName.trim();
+
+      let matched = partNo
+        ? products.find((p) => p.barcode && p.barcode.trim().toLowerCase() === partNo.toLowerCase())
+        : undefined;
+      let matchedBy: 'barcode' | 'name' | undefined = matched ? 'barcode' : undefined;
+
+      if (!matched && name) {
+        matched = products.find((p) => p.productName.toLowerCase().trim() === name.toLowerCase());
+        if (matched) matchedBy = 'name';
+      }
+
       current.matchedProductId = matched?.id;
+      current.matchedBy = matchedBy;
     }
 
     updated[index] = current;
@@ -166,9 +288,11 @@ export function PurchaseOcrModal({
       ...items,
       {
         productName: '',
+        partNumber: '',
         quantity: 1,
         purchasePrice: 0,
         gstPercentage: 18,
+        sellingPrice: 0,
         amountWithGst: 0,
       },
     ]);
@@ -178,7 +302,8 @@ export function PurchaseOcrModal({
     setItems(items.filter((_, i) => i !== index));
   };
 
-  const totalCalculatedAmount = Math.round(items.reduce((sum, item) => sum + (item.amountWithGst || 0), 0) * 100) / 100;
+  const totalCalculatedAmount =
+    Math.round(items.reduce((sum, item) => sum + (item.amountWithGst || 0), 0) * 100) / 100;
 
   const handleConfirmPurchase = async () => {
     if (!firestore) return;
@@ -219,42 +344,64 @@ export function PurchaseOcrModal({
         const finalItems: Array<{
           productId: string;
           productName: string;
+          barcode?: string;
           quantity: number;
           purchasePrice: number;
           totalAmount: number;
         }> = [];
 
         enriched.forEach(({ item, isNew, existingRef, newRef }, index) => {
+          const basePurchasePrice = getBasePurchasePrice(
+            item.purchasePrice,
+            item.gstPercentage,
+            isGstIncluded
+          );
+          const finalSellingPrice =
+            item.sellingPrice || item.mrp || Math.round(basePurchasePrice * 1.25);
+          const partNoBarcode = item.partNumber.trim();
+
           if (isNew && newRef) {
-            // Create brand-new product
+            // Create brand-new product with SKU/barcode and selling price
             transaction.set(newRef, {
               productName: item.productName,
+              barcode: partNoBarcode || '',
               category: 'General',
-              purchasePrice: item.purchasePrice,
-              sellingPrice: Math.round(item.purchasePrice * 1.25),
+              purchasePrice: basePurchasePrice,
+              sellingPrice: finalSellingPrice,
               stockQuantity: item.quantity,
               gstPercentage: item.gstPercentage,
             });
             finalItems.push({
               productId: newRef.id,
               productName: item.productName,
+              barcode: partNoBarcode || undefined,
               quantity: item.quantity,
               purchasePrice: item.purchasePrice,
               totalAmount: item.amountWithGst,
             });
           } else if (existingRef) {
-            // Update stock on existing product
+            // Update stock and prices on existing product
             const prodDoc = productDocs[index];
             if (prodDoc?.exists()) {
               const currentStock = prodDoc.data().stockQuantity || 0;
-              transaction.update(existingRef, {
+              const updateData: Record<string, any> = {
                 stockQuantity: currentStock + item.quantity,
-                purchasePrice: item.purchasePrice,
-              });
+                purchasePrice: basePurchasePrice,
+              };
+              // Set barcode if existing product lacks one and partNo is present
+              if (!prodDoc.data().barcode && partNoBarcode) {
+                updateData.barcode = partNoBarcode;
+              }
+              // Update selling price if extracted from MRP or specified
+              if (item.sellingPrice && item.sellingPrice > 0) {
+                updateData.sellingPrice = finalSellingPrice;
+              }
+              transaction.update(existingRef, updateData);
             }
             finalItems.push({
               productId: existingRef.id,
               productName: item.productName,
+              barcode: partNoBarcode || undefined,
               quantity: item.quantity,
               purchasePrice: item.purchasePrice,
               totalAmount: item.amountWithGst,
@@ -269,6 +416,7 @@ export function PurchaseOcrModal({
           date: new Date(purchaseDate).toISOString(),
           items: finalItems,
           totalAmount: totalCalculatedAmount,
+          isGstIncluded,
         });
       });
 
@@ -297,6 +445,7 @@ export function PurchaseOcrModal({
     setPreviewUrl('');
     setSupplierName('');
     setInvoiceNo('');
+    setIsGstIncluded(false);
     setItems([]);
     setOcrError(null);
   };
@@ -309,14 +458,14 @@ export function PurchaseOcrModal({
         onOpenChange(open);
       }}
     >
-      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-5xl max-h-[92vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
             AI OCR Purchase Invoice Scanner
           </DialogTitle>
           <DialogDescription>
-            Upload a purchase bill or document to automatically extract line items, prices, and update stock.
+            Upload a purchase bill or document to automatically extract line items, Part No (SKU/barcode), MRP selling prices, and update stock.
           </DialogDescription>
         </DialogHeader>
 
@@ -340,9 +489,11 @@ export function PurchaseOcrModal({
                       setItems([
                         {
                           productName: '',
+                          partNumber: '',
                           quantity: 1,
                           purchasePrice: 0,
                           gstPercentage: 18,
+                          sellingPrice: 0,
                           amountWithGst: 0,
                         },
                       ]);
@@ -409,7 +560,7 @@ export function PurchaseOcrModal({
                 Analyzing Invoice with AI OCR...
               </h3>
               <p className="text-sm text-muted-foreground">
-                Extracting supplier details, product items, rates, and GST values.
+                Extracting supplier details, Part No (SKU), MRP selling prices, and GST calculation mode.
               </p>
             </div>
           </div>
@@ -418,38 +569,81 @@ export function PurchaseOcrModal({
         {/* STEP 3: VERIFICATION & EDITABLE TABLE */}
         {step === 'verify' && (
           <div className="flex-1 overflow-y-auto space-y-4 py-2 pr-1">
-            {/* Header Details */}
+            {/* Header Details + GST Inclusive Tick Box */}
             <Card className="border-primary/20 bg-muted/20">
-              <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4">
-                <div>
-                  <Label htmlFor="ocr-supplier">Supplier Name</Label>
-                  <Input
-                    id="ocr-supplier"
-                    value={supplierName}
-                    onChange={(e) => setSupplierName(e.target.value)}
-                    placeholder="e.g. Global Auto Parts"
-                    className="mt-1"
-                  />
+              <CardContent className="p-4 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <Label htmlFor="ocr-supplier">Supplier Name</Label>
+                    <Input
+                      id="ocr-supplier"
+                      value={supplierName}
+                      onChange={(e) => setSupplierName(e.target.value)}
+                      placeholder="e.g. Global Auto Parts"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ocr-invoiceno">Invoice Number</Label>
+                    <Input
+                      id="ocr-invoiceno"
+                      value={invoiceNo}
+                      onChange={(e) => setInvoiceNo(e.target.value)}
+                      placeholder="e.g. INV-99882"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ocr-date">Invoice Date</Label>
+                    <Input
+                      id="ocr-date"
+                      type="date"
+                      value={purchaseDate}
+                      onChange={(e) => setPurchaseDate(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <Label htmlFor="ocr-invoiceno">Invoice Number</Label>
-                  <Input
-                    id="ocr-invoiceno"
-                    value={invoiceNo}
-                    onChange={(e) => setInvoiceNo(e.target.value)}
-                    placeholder="e.g. INV-99882"
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="ocr-date">Invoice Date</Label>
-                  <Input
-                    id="ocr-date"
-                    type="date"
-                    value={purchaseDate}
-                    onChange={(e) => setPurchaseDate(e.target.value)}
-                    className="mt-1"
-                  />
+
+                {/* GST INCLUDED TICK BOX */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg border bg-background/80 shadow-xs">
+                  <div className="flex items-center space-x-3">
+                    <Checkbox
+                      id="ocr-gst-included"
+                      checked={isGstIncluded}
+                      onCheckedChange={(checked) => handleToggleGstIncluded(Boolean(checked))}
+                      className="h-5 w-5 data-[state=checked]:bg-primary"
+                    />
+                    <div
+                      className="grid gap-0.5 leading-none cursor-pointer select-none"
+                      onClick={() => handleToggleGstIncluded(!isGstIncluded)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="ocr-gst-included" className="font-semibold text-sm cursor-pointer">
+                          Invoice Prices Include GST (Tax Inclusive)
+                        </Label>
+                        {isGstIncluded ? (
+                          <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 text-[10px] gap-1 font-medium">
+                            <Receipt className="h-3 w-3" /> GST Included in Rate
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 text-[10px] gap-1 font-medium">
+                            <Receipt className="h-3 w-3" /> GST Calculated on Top
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {isGstIncluded
+                          ? 'Bill rate already includes tax; base cost is calculated backwards (Rate ÷ (1 + GST%)). Total = Qty × Rate.'
+                          : 'Bill rate is base price (tax excluded); GST is calculated and added to the total (Qty × Rate × (1 + GST%)).'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-muted-foreground flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                    <Info className="h-3.5 w-3.5 text-primary" />
+                    <span>Toggle this tick box to match your supplier invoice.</span>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -457,10 +651,15 @@ export function PurchaseOcrModal({
             {/* Extracted Line Items */}
             <div className="space-y-2">
               <div className="flex justify-between items-center">
-                <h4 className="font-semibold text-sm flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 text-primary" />
-                  Extracted Items ({items.length})
-                </h4>
+                  <h4 className="font-semibold text-sm">
+                    Extracted Items ({items.length})
+                  </h4>
+                  <span className="text-xs text-muted-foreground">
+                    (Part No extracted as SKU/Barcode • MRP extracted as Selling Price)
+                  </span>
+                </div>
                 <Button type="button" variant="outline" size="sm" onClick={handleAddItem} className="gap-1">
                   <Plus className="h-3.5 w-3.5" />
                   Add Item
@@ -471,91 +670,179 @@ export function PurchaseOcrModal({
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/50">
-                      <TableHead className="w-[28%] min-w-[120px]">Product Name</TableHead>
-                      <TableHead className="w-[9%] min-w-[60px] text-center">Qty</TableHead>
-                      <TableHead className="w-[17%] min-w-[90px]">Unit Price (₹)</TableHead>
-                      <TableHead className="w-[10%] min-w-[65px] text-center">GST %</TableHead>
-                      <TableHead className="w-[16%] min-w-[80px] text-right">Total (₹)</TableHead>
-                      <TableHead className="w-[13%] min-w-[70px] text-center">Stock Match</TableHead>
-                      <TableHead className="w-[7%]"></TableHead>
+                      <TableHead className="w-[16%] min-w-[110px]">
+                        <span className="flex items-center gap-1">
+                          <Barcode className="h-3 w-3 text-primary" /> Part No / SKU
+                        </span>
+                      </TableHead>
+                      <TableHead className="w-[24%] min-w-[130px]">Product Name</TableHead>
+                      <TableHead className="w-[8%] min-w-[55px] text-center">Qty</TableHead>
+                      <TableHead className="w-[14%] min-w-[90px]">
+                        Rate (₹) {isGstIncluded ? <span className="text-[10px] text-emerald-600 block">(Incl. GST)</span> : <span className="text-[10px] text-muted-foreground block">(Excl. GST)</span>}
+                      </TableHead>
+                      <TableHead className="w-[8%] min-w-[55px] text-center">GST %</TableHead>
+                      <TableHead className="w-[14%] min-w-[95px]">
+                        <span className="flex items-center gap-1">
+                          <Tag className="h-3 w-3 text-emerald-600" /> Selling / MRP (₹)
+                        </span>
+                      </TableHead>
+                      <TableHead className="w-[11%] min-w-[80px] text-right">Total (₹)</TableHead>
+                      <TableHead className="w-[10%] min-w-[70px] text-center">Stock Match</TableHead>
+                      <TableHead className="w-[5%]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {items.map((item, idx) => (
-                      <TableRow key={idx}>
-                        <TableCell>
-                          <Input
-                            value={item.productName}
-                            onChange={(e) => handleItemChange(idx, 'productName', e.target.value)}
-                            className="h-8 text-xs font-medium"
-                          />
-                        </TableCell>
-                        <TableCell className="px-2">
-                          <Input
-                            type="number"
-                            min="0.001"
-                            step="any"
-                            value={item.quantity}
-                            onChange={(e) => handleItemChange(idx, 'quantity', e.target.value)}
-                            className="h-8 text-sm text-center w-full min-w-[52px] px-1 font-mono"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            min="0"
-                            step="any"
-                            value={item.purchasePrice}
-                            onChange={(e) => handleItemChange(idx, 'purchasePrice', e.target.value)}
-                            className="h-8 text-xs font-mono"
-                          />
-                        </TableCell>
-                        <TableCell className="px-2">
-                          <Input
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="any"
-                            value={item.gstPercentage}
-                            onChange={(e) => handleItemChange(idx, 'gstPercentage', e.target.value)}
-                            className="h-8 text-sm text-center w-full min-w-[52px] px-1 font-mono"
-                          />
-                        </TableCell>
-                        <TableCell className="text-right font-semibold text-xs font-mono">
-                          ₹{formatCurrency(item.amountWithGst)}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {item.matchedProductId ? (
-                            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-[10px] gap-1">
-                              <PackageCheck className="h-3 w-3" /> Match
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="bg-indigo-500/10 text-indigo-600 border-indigo-500/30 text-[10px] gap-1">
-                              <PackagePlus className="h-3 w-3" /> New
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-destructive"
-                            onClick={() => handleRemoveItem(idx)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {items.map((item, idx) => {
+                      const basePrice = getBasePurchasePrice(
+                        item.purchasePrice,
+                        item.gstPercentage,
+                        isGstIncluded
+                      );
+
+                      return (
+                        <TableRow key={idx}>
+                          {/* Part No / SKU / Barcode */}
+                          <TableCell className="px-2">
+                            <Input
+                              value={item.partNumber}
+                              onChange={(e) => handleItemChange(idx, 'partNumber', e.target.value)}
+                              placeholder="Part No / SKU"
+                              className="h-8 text-xs font-mono"
+                              title="Part Number used as SKU / Barcode"
+                            />
+                          </TableCell>
+
+                          {/* Product Name */}
+                          <TableCell>
+                            <Input
+                              value={item.productName}
+                              onChange={(e) => handleItemChange(idx, 'productName', e.target.value)}
+                              placeholder="Item description"
+                              className="h-8 text-xs font-medium"
+                            />
+                          </TableCell>
+
+                          {/* Quantity */}
+                          <TableCell className="px-2">
+                            <Input
+                              type="number"
+                              min="0.001"
+                              step="any"
+                              value={item.quantity}
+                              onChange={(e) => handleItemChange(idx, 'quantity', e.target.value)}
+                              className="h-8 text-xs text-center w-full min-w-[50px] px-1 font-mono"
+                            />
+                          </TableCell>
+
+                          {/* Unit Purchase Rate */}
+                          <TableCell>
+                            <div className="space-y-0.5">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={item.purchasePrice}
+                                onChange={(e) => handleItemChange(idx, 'purchasePrice', e.target.value)}
+                                className="h-8 text-xs font-mono"
+                              />
+                              {isGstIncluded && item.gstPercentage > 0 && (
+                                <span className="text-[10px] text-muted-foreground block font-mono">
+                                  Base: ₹{formatCurrency(basePrice)}
+                                </span>
+                              )}
+                            </div>
+                          </TableCell>
+
+                          {/* GST % */}
+                          <TableCell className="px-2">
+                            <Input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="any"
+                              value={item.gstPercentage}
+                              onChange={(e) => handleItemChange(idx, 'gstPercentage', e.target.value)}
+                              className="h-8 text-xs text-center w-full min-w-[50px] px-1 font-mono"
+                            />
+                          </TableCell>
+
+                          {/* Selling Price / MRP */}
+                          <TableCell>
+                            <div className="space-y-0.5">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={item.sellingPrice}
+                                onChange={(e) => handleItemChange(idx, 'sellingPrice', e.target.value)}
+                                className="h-8 text-xs font-mono font-medium text-emerald-700 dark:text-emerald-400"
+                              />
+                              {item.mrp && item.mrp > 0 ? (
+                                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-0.5">
+                                  <Tag className="h-2.5 w-2.5" /> MRP: ₹{formatCurrency(item.mrp)}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-muted-foreground block">
+                                  Auto +25% markup
+                                </span>
+                              )}
+                            </div>
+                          </TableCell>
+
+                          {/* Total with GST */}
+                          <TableCell className="text-right font-semibold text-xs font-mono">
+                            ₹{formatCurrency(item.amountWithGst)}
+                          </TableCell>
+
+                          {/* Inventory Match Badge */}
+                          <TableCell className="text-center">
+                            {item.matchedProductId ? (
+                              <Badge
+                                variant="outline"
+                                className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-[10px] gap-1"
+                                title={item.matchedBy === 'barcode' ? 'Matched by Part No/Barcode' : 'Matched by Product Name'}
+                              >
+                                <PackageCheck className="h-3 w-3" />
+                                {item.matchedBy === 'barcode' ? 'Part Match' : 'Match'}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="bg-indigo-500/10 text-indigo-600 border-indigo-500/30 text-[10px] gap-1">
+                                <PackagePlus className="h-3 w-3" /> New
+                              </Badge>
+                            )}
+                          </TableCell>
+
+                          {/* Remove */}
+                          <TableCell>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive"
+                              onClick={() => handleRemoveItem(idx)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
             </div>
 
             {/* Total Summary */}
-            <div className="flex justify-end p-3 rounded-lg bg-primary/10 border border-primary/20">
-              <div className="text-right">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 p-3 rounded-lg bg-primary/10 border border-primary/20">
+              <div className="text-xs space-y-0.5">
+                <span className="font-semibold text-foreground">Tax Calculation Summary:</span>
+                <p className="text-muted-foreground">
+                  {isGstIncluded
+                    ? 'All invoice rates are GST-inclusive. Total is sum of line amounts.'
+                    : 'Invoice rates exclude GST. Total includes calculated GST on top of unit rates.'}
+                </p>
+              </div>
+              <div className="text-right self-end sm:self-auto">
                 <span className="text-xs text-muted-foreground font-medium">Grand Total Purchase Amount:</span>
                 <div className="text-xl font-bold text-primary font-mono">₹{formatCurrency(totalCalculatedAmount)}</div>
               </div>
@@ -578,3 +865,4 @@ export function PurchaseOcrModal({
     </Dialog>
   );
 }
+

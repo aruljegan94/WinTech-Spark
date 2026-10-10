@@ -49,6 +49,8 @@ import type {
   SettlementChecklistRecord,
   MechanicCommissionRecord,
   Purchase,
+  Product,
+  ServiceSettlementRecord,
 } from '@/lib/types';
 import {
   format,
@@ -87,6 +89,9 @@ import {
   Trash2,
   Check,
   AlertTriangle,
+  Search,
+  RotateCcw,
+  Filter,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -146,12 +151,114 @@ export default function ChecklistPage() {
   const { data: defaultProfileData } = useCollection<CompanyProfile>(defaultProfileQuery);
   const companyProfile = useMemo(() => defaultProfileData?.[0], [defaultProfileData]);
 
+  // Products collection to check category === 'Service'
+  const productsQuery = useMemoFirebase(
+    () => (firestore ? collection(firestore, 'products') : null),
+    [firestore]
+  );
+  const { data: rawProducts } = useCollection<Product>(productsQuery);
+
+  // Service Settlements collection (persists Settled vs Pending status)
+  const serviceSettlementsQuery = useMemoFirebase(
+    () => (firestore ? collection(firestore, 'serviceSettlements') : null),
+    [firestore]
+  );
+  const { data: rawServiceSettlements } = useCollection<ServiceSettlementRecord>(serviceSettlementsQuery);
+
+  const productsMap = useMemo(() => {
+    const map = new Map<string, Product>();
+    rawProducts?.forEach((p) => map.set(p.id, p));
+    return map;
+  }, [rawProducts]);
+
+  const serviceSettlementMap = useMemo(() => {
+    const map = new Map<string, ServiceSettlementRecord>();
+    rawServiceSettlements?.forEach((s) => map.set(s.id, s));
+    return map;
+  }, [rawServiceSettlements]);
+
+  // Helper: check if a sale item belongs to Category "Service"
+  const isServiceItem = (item: { productId?: string; productName: string }) => {
+    const prod = item.productId ? productsMap.get(item.productId) : undefined;
+    const cat = (prod?.category || '').toLowerCase().trim();
+    if (cat === 'service' || cat === 'services' || cat === 'labor' || cat === 'labour') {
+      return true;
+    }
+    const name = (item.productName || '').toLowerCase().trim();
+    return (
+      name.includes('service') ||
+      name.includes('labour') ||
+      name.includes('labor') ||
+      name.includes('fitting') ||
+      name.includes('wash') ||
+      name.includes('repair') ||
+      name.includes('alignment') ||
+      name.includes('balancing')
+    );
+  };
+
+  // Helper: extract and enrich all service items from an array of sales
+  const extractServiceItems = (salesList: Sale[]) => {
+    const list: Array<{
+      id: string;
+      saleId: string;
+      invoiceNumber: string;
+      date: string;
+      customerName: string;
+      customerMobile: string;
+      productId: string;
+      productName: string;
+      category: string;
+      quantity: number;
+      price: number;
+      total: number;
+      paymentMode: string;
+      paymentStatus: string;
+      status: 'Settled' | 'Pending';
+      settledAt?: string;
+      settledBy?: string;
+      notes?: string;
+    }> = [];
+
+    salesList.forEach((sale) => {
+      (sale.items || []).forEach((item, idx) => {
+        if (isServiceItem(item)) {
+          const id = `${sale.id}_${idx}`;
+          const existing = serviceSettlementMap.get(id);
+          const prod = item.productId ? productsMap.get(item.productId) : undefined;
+          list.push({
+            id,
+            saleId: sale.id,
+            invoiceNumber: sale.invoiceNumber,
+            date: sale.date,
+            customerName: sale.customerName || 'Walk-in Customer',
+            customerMobile: sale.customerMobile || '',
+            productId: item.productId,
+            productName: item.productName,
+            category: prod?.category || 'Service',
+            quantity: item.quantity,
+            price: item.price,
+            total: item.total,
+            paymentMode: sale.paymentMode || 'Cash',
+            paymentStatus: sale.paymentStatus || 'Paid',
+            status: existing?.status || 'Pending',
+            settledAt: existing?.settledAt,
+            settledBy: existing?.settledBy,
+            notes: existing?.notes,
+          });
+        }
+      });
+    });
+    return list;
+  };
+
   // ── TAB 1: DAILY SETTLEMENT STATE ──────────────────────────────────────────
   const [dailyDate, setDailyDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
   const [physicalCashInput, setPhysicalCashInput] = useState<string>('');
   const [actualUpiInput, setActualUpiInput] = useState<string>('');
   const [dailyNotes, setDailyNotes] = useState<string>('');
   const [showDenominations, setShowDenominations] = useState<boolean>(false);
+  const [dailyServiceFilter, setDailyServiceFilter] = useState<'all' | 'pending' | 'settled'>('all');
   const [denominations, setDenominations] = useState({
     d500: '',
     d200: '',
@@ -162,12 +269,20 @@ export default function ChecklistPage() {
     coins: '',
   });
 
+  // Dedicated Service Tab state
+  const [servicesTabPeriod, setServicesTabPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'all'>('daily');
+  const [servicesTabFilter, setServicesTabFilter] = useState<'all' | 'pending' | 'settled'>('all');
+  const [servicesTabSearch, setServicesTabSearch] = useState<string>('');
+  const [showWeeklyServices, setShowWeeklyServices] = useState<boolean>(false);
+  const [showMonthlyServices, setShowMonthlyServices] = useState<boolean>(false);
+
   // Daily checklist items
   const [dailyChecks, setDailyChecks] = useState<Record<string, boolean>>({
     cashCounted: false,
     upiVerified: false,
     expensesLogged: false,
     pendingFollowedUp: false,
+    serviceSettled: false,
     drawerClosed: false,
   });
 
@@ -203,6 +318,10 @@ export default function ChecklistPage() {
         expectedCash: 0,
         pendingSalesList: [],
         totalPendingToday: 0,
+        serviceItems: [] as ReturnType<typeof extractServiceItems>,
+        serviceTotal: 0,
+        serviceSettled: 0,
+        servicePending: 0,
       };
     }
 
@@ -260,6 +379,16 @@ export default function ChecklistPage() {
     const expectedCash = Math.max(0, Math.round((cashSales - cashExpenses) * 100) / 100);
     const totalPendingToday = pendingSalesList.reduce((sum, item) => sum + item.dueAmount, 0);
 
+    // Category: Service items from daily invoices
+    const dayServiceItems = extractServiceItems(daySales);
+    const serviceTotal = Math.round(dayServiceItems.reduce((acc, i) => acc + (i.total || 0), 0) * 100) / 100;
+    const serviceSettled = Math.round(
+      dayServiceItems.filter((i) => i.status === 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100
+    ) / 100;
+    const servicePending = Math.round(
+      dayServiceItems.filter((i) => i.status !== 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100
+    ) / 100;
+
     return {
       cashSales,
       upiSales,
@@ -269,8 +398,12 @@ export default function ChecklistPage() {
       expectedCash,
       pendingSalesList,
       totalPendingToday,
+      serviceItems: dayServiceItems,
+      serviceTotal,
+      serviceSettled,
+      servicePending,
     };
-  }, [rawSales, rawExpenses, dailyDate]);
+  }, [rawSales, rawExpenses, rawProducts, rawServiceSettlements, dailyDate]);
 
   // Saved audit record for selected dailyDate
   const savedDailyAudit = useMemo(() => {
@@ -314,6 +447,9 @@ export default function ChecklistPage() {
         upiVariance,
         totalExpenses: dailyMetrics.cashExpenses,
         pendingReceivables: dailyMetrics.totalPendingToday,
+        serviceTotal: dailyMetrics.serviceTotal,
+        serviceSettled: dailyMetrics.serviceSettled,
+        servicePending: dailyMetrics.servicePending,
         checks: dailyChecks,
         notes: dailyNotes.trim(),
         updatedAt: new Date().toISOString(),
@@ -398,6 +534,16 @@ export default function ChecklistPage() {
     const collectionRate = totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 100) : 100;
     const netCashFlow = totalCollected - weekExpenses;
 
+    // Category: Service items for the week
+    const weeklyServiceItems = extractServiceItems(weekSales);
+    const weeklyServiceTotal = Math.round(weeklyServiceItems.reduce((acc, i) => acc + (i.total || 0), 0) * 100) / 100;
+    const weeklyServiceSettled = Math.round(
+      weeklyServiceItems.filter((i) => i.status === 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100
+    ) / 100;
+    const weeklyServicePending = Math.round(
+      weeklyServiceItems.filter((i) => i.status !== 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100
+    ) / 100;
+
     return {
       totalBilled,
       cashCollected,
@@ -408,8 +554,12 @@ export default function ChecklistPage() {
       collectionRate,
       netCashFlow,
       count: weekSales.length,
+      serviceItems: weeklyServiceItems,
+      serviceTotal: weeklyServiceTotal,
+      serviceSettled: weeklyServiceSettled,
+      servicePending: weeklyServicePending,
     };
-  }, [rawSales, rawExpenses, weekInterval]);
+  }, [rawSales, rawExpenses, rawProducts, rawServiceSettlements, weekInterval]);
 
   // ── TAB 3: MONTHLY SETTLEMENT & METRICS ────────────────────────────────────
   const [monthlyDate, setMonthlyDate] = useState<Date>(new Date());
@@ -468,6 +618,16 @@ export default function ChecklistPage() {
     const netOperatingProfit = grossMargin - mExpenses;
     const totalShopReceivables = (rawCustomers || []).reduce((sum, c) => sum + (c.pendingDue || 0), 0);
 
+    // Category: Service items for the month
+    const monthlyServiceItems = extractServiceItems(mSales);
+    const monthlyServiceTotal = Math.round(monthlyServiceItems.reduce((acc, i) => acc + (i.total || 0), 0) * 100) / 100;
+    const monthlyServiceSettled = Math.round(
+      monthlyServiceItems.filter((i) => i.status === 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100
+    ) / 100;
+    const monthlyServicePending = Math.round(
+      monthlyServiceItems.filter((i) => i.status !== 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100
+    ) / 100;
+
     return {
       totalRevenue,
       totalCollected,
@@ -477,8 +637,135 @@ export default function ChecklistPage() {
       netOperatingProfit,
       totalShopReceivables,
       salesCount: mSales.length,
+      serviceItems: monthlyServiceItems,
+      serviceTotal: monthlyServiceTotal,
+      serviceSettled: monthlyServiceSettled,
+      servicePending: monthlyServicePending,
     };
-  }, [rawSales, rawExpenses, rawPurchases, rawCustomers, monthlyDate]);
+  }, [rawSales, rawExpenses, rawPurchases, rawCustomers, rawProducts, rawServiceSettlements, monthlyDate]);
+
+  // All time service items for dedicated Service tab
+  const allServiceItems = useMemo(() => {
+    if (!rawSales) return [];
+    return extractServiceItems(rawSales);
+  }, [rawSales, rawProducts, rawServiceSettlements]);
+
+  // Action: Toggle a single service item between Settled and Pending
+  const handleToggleServiceSettlement = async (item: {
+    id: string;
+    saleId: string;
+    invoiceNumber: string;
+    date: string;
+    customerName: string;
+    customerMobile: string;
+    productId: string;
+    productName: string;
+    quantity: number;
+    price: number;
+    total: number;
+    status: 'Settled' | 'Pending';
+  }) => {
+    if (!firestore) return;
+    const newStatus: 'Settled' | 'Pending' = item.status === 'Settled' ? 'Pending' : 'Settled';
+    try {
+      const ref = doc(firestore, 'serviceSettlements', item.id);
+      const payload: ServiceSettlementRecord = {
+        id: item.id,
+        saleId: item.saleId,
+        invoiceNumber: item.invoiceNumber,
+        date: item.date,
+        customerName: item.customerName,
+        customerMobile: item.customerMobile,
+        productId: item.productId,
+        productName: item.productName,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total,
+        status: newStatus,
+        settledAt: newStatus === 'Settled' ? new Date().toISOString() : undefined,
+        settledBy: newStatus === 'Settled' ? 'Store Manager' : undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      await setDoc(ref, payload, { merge: true });
+      toast({
+        title: newStatus === 'Settled' ? 'Service Settled' : 'Marked as Pending',
+        description: `${item.productName} (Invoice #${item.invoiceNumber}) marked as ${newStatus}.`,
+      });
+    } catch (err: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Update Failed',
+        description: err.message,
+      });
+    }
+  };
+
+  // Action: Bulk set all services in a list as Settled or Pending
+  const handleBulkSetServiceSettlement = async (
+    itemsList: Array<{
+      id: string;
+      saleId: string;
+      invoiceNumber: string;
+      date: string;
+      customerName: string;
+      customerMobile: string;
+      productId: string;
+      productName: string;
+      quantity: number;
+      price: number;
+      total: number;
+      status: 'Settled' | 'Pending';
+    }>,
+    targetStatus: 'Settled' | 'Pending'
+  ) => {
+    if (!firestore || itemsList.length === 0) return;
+    const targetItems = itemsList.filter((i) => i.status !== targetStatus);
+    if (targetItems.length === 0) {
+      toast({
+        title: `Already ${targetStatus}`,
+        description: `All items are already marked as ${targetStatus}.`,
+      });
+      return;
+    }
+    try {
+      await Promise.all(
+        targetItems.map((item) => {
+          const ref = doc(firestore, 'serviceSettlements', item.id);
+          return setDoc(
+            ref,
+            {
+              id: item.id,
+              saleId: item.saleId,
+              invoiceNumber: item.invoiceNumber,
+              date: item.date,
+              customerName: item.customerName,
+              customerMobile: item.customerMobile,
+              productId: item.productId,
+              productName: item.productName,
+              quantity: item.quantity,
+              price: item.price,
+              total: item.total,
+              status: targetStatus,
+              settledAt: targetStatus === 'Settled' ? new Date().toISOString() : undefined,
+              settledBy: targetStatus === 'Settled' ? 'Store Manager' : undefined,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+        })
+      );
+      toast({
+        title: `Bulk Update Complete`,
+        description: `Marked ${targetItems.length} service item(s) as ${targetStatus}.`,
+      });
+    } catch (err: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Bulk Update Failed',
+        description: err.message,
+      });
+    }
+  };
 
   // ── TAB 4: MECHANIC COMMISSION CALCULATOR STATE ────────────────────────────
   const [selectedMechanic, setSelectedMechanic] = useState<string>('');
@@ -654,6 +941,107 @@ export default function ChecklistPage() {
       .reduce((sum, c) => sum + (c.netPayable || 0), 0);
   }, [rawCommissions]);
 
+  // Dedicated Service Tab Scoped Metrics & Filtering
+  const scopedServiceMetrics = useMemo(() => {
+    let baseList = allServiceItems;
+    let label = 'All Invoices';
+    if (servicesTabPeriod === 'daily') {
+      const targetDate = new Date(dailyDate);
+      baseList = allServiceItems.filter((i) => {
+        try {
+          return isSameDay(new Date(i.date), targetDate);
+        } catch {
+          return false;
+        }
+      });
+      label = format(targetDate, 'dd-MMM-yyyy');
+    } else if (servicesTabPeriod === 'weekly') {
+      baseList = allServiceItems.filter((i) => {
+        try {
+          return isWithinInterval(new Date(i.date), weekInterval);
+        } catch {
+          return false;
+        }
+      });
+      label = `${format(weekInterval.start, 'dd-MMM')} — ${format(weekInterval.end, 'dd-MMM-yyyy')}`;
+    } else if (servicesTabPeriod === 'monthly') {
+      const mInterval = { start: startOfMonth(monthlyDate), end: endOfMonth(monthlyDate) };
+      baseList = allServiceItems.filter((i) => {
+        try {
+          return isWithinInterval(new Date(i.date), mInterval);
+        } catch {
+          return false;
+        }
+      });
+      label = format(monthlyDate, 'MMMM yyyy');
+    }
+
+    const total = Math.round(baseList.reduce((acc, i) => acc + (i.total || 0), 0) * 100) / 100;
+    const settled = Math.round(baseList.filter((i) => i.status === 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100) / 100;
+    const pending = Math.round(baseList.filter((i) => i.status !== 'Settled').reduce((acc, i) => acc + (i.total || 0), 0) * 100) / 100;
+    const settledCount = baseList.filter((i) => i.status === 'Settled').length;
+    const pendingCount = baseList.filter((i) => i.status !== 'Settled').length;
+    const rate = total > 0 ? Math.round((settled / total) * 100) : 100;
+
+    return {
+      items: baseList,
+      total,
+      settled,
+      pending,
+      settledCount,
+      pendingCount,
+      rate,
+      label,
+    };
+  }, [allServiceItems, servicesTabPeriod, dailyDate, weekInterval, monthlyDate]);
+
+  const displayedServiceItems = useMemo(() => {
+    return scopedServiceMetrics.items.filter((item) => {
+      if (servicesTabFilter === 'pending' && item.status !== 'Pending') return false;
+      if (servicesTabFilter === 'settled' && item.status !== 'Settled') return false;
+
+      if (servicesTabSearch.trim()) {
+        const query = servicesTabSearch.toLowerCase().trim();
+        const matchInvoice = item.invoiceNumber.toLowerCase().includes(query);
+        const matchCustomer = item.customerName.toLowerCase().includes(query);
+        const matchMobile = item.customerMobile.includes(query);
+        const matchService = item.productName.toLowerCase().includes(query);
+        if (!matchInvoice && !matchCustomer && !matchMobile && !matchService) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [scopedServiceMetrics.items, servicesTabFilter, servicesTabSearch]);
+
+  const handleSendWhatsAppServiceSettlementSummary = () => {
+    const compName = companyProfile?.companyName || 'WinTech-Spark';
+    let text = `🛠️ *SERVICE SETTLEMENT REPORT - ${compName}*\n\n`;
+    text += `📅 *Period:* ${scopedServiceMetrics.label}\n`;
+    text += `💼 *Total Services Billed:* ₹${scopedServiceMetrics.total.toLocaleString()} (${scopedServiceMetrics.items.length} jobs)\n`;
+    text += `✅ *Settled Amount:* ₹${scopedServiceMetrics.settled.toLocaleString()} (${scopedServiceMetrics.settledCount} jobs)\n`;
+    text += `⏳ *Pending Amount:* ₹${scopedServiceMetrics.pending.toLocaleString()} (${scopedServiceMetrics.pendingCount} jobs)\n`;
+    text += `📊 *Settlement Progress:* ${scopedServiceMetrics.rate}%\n\n`;
+
+    if (scopedServiceMetrics.pendingCount > 0) {
+      text += `*⚠️ Pending Services to Settle:*\n`;
+      scopedServiceMetrics.items
+        .filter((i) => i.status !== 'Settled')
+        .slice(0, 10)
+        .forEach((i, idx) => {
+          text += `${idx + 1}. #${i.invoiceNumber} - ${i.productName} (₹${i.total.toLocaleString()})\n`;
+        });
+      if (scopedServiceMetrics.pendingCount > 10) {
+        text += `...and ${scopedServiceMetrics.pendingCount - 10} more pending jobs.\n`;
+      }
+      text += `\n`;
+    }
+
+    text += `Report generated from BillingSoft Finance Checklist.`;
+    const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  };
+
   return (
     <div className="space-y-4 max-w-7xl mx-auto pb-12">
       <PageHeader
@@ -667,10 +1055,14 @@ export default function ChecklistPage() {
       </PageHeader>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid grid-cols-2 md:grid-cols-4 w-full h-auto p-1 bg-muted/60">
+        <TabsList className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 w-full h-auto p-1 bg-muted/60">
           <TabsTrigger value="daily" className="gap-2 py-2 text-xs md:text-sm font-semibold">
             <Calendar className="h-4 w-4 text-emerald-600" />
             <span>Daily Settlement</span>
+          </TabsTrigger>
+          <TabsTrigger value="services" className="gap-2 py-2 text-xs md:text-sm font-semibold">
+            <Wrench className="h-4 w-4 text-cyan-600" />
+            <span>Service Settlements</span>
           </TabsTrigger>
           <TabsTrigger value="weekly" className="gap-2 py-2 text-xs md:text-sm font-semibold">
             <TrendingUp className="h-4 w-4 text-indigo-600" />
@@ -1070,13 +1462,177 @@ export default function ChecklistPage() {
             </Card>
           </div>
 
+          {/* 3. Category: Service Settlements from Daily Invoices */}
+          <Card className="border-cyan-200 dark:border-cyan-900/60 shadow-sm">
+            <CardHeader className="p-4 pb-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-cyan-700 dark:text-cyan-400">
+                  <Wrench className="h-5 w-5" />
+                  <CardTitle className="text-base">3. Category: Service Settlements (From Today's Invoices)</CardTitle>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="text-cyan-700 dark:text-cyan-300 border-cyan-300 bg-cyan-50 dark:bg-cyan-950/40 font-mono text-xs">
+                    Total: ₹{dailyMetrics.serviceTotal.toLocaleString()}
+                  </Badge>
+                  <Badge variant="outline" className="text-emerald-700 dark:text-emerald-300 border-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 font-mono text-xs">
+                    Settled: ₹{dailyMetrics.serviceSettled.toLocaleString()}
+                  </Badge>
+                  <Badge variant="outline" className="text-amber-700 dark:text-amber-300 border-amber-300 bg-amber-50 dark:bg-amber-950/40 font-mono text-xs">
+                    Pending: ₹{dailyMetrics.servicePending.toLocaleString()}
+                  </Badge>
+                </div>
+              </div>
+              <CardDescription className="text-xs">
+                Labor, repair, and services extracted from today's customer bills. Track and mark each service as Settled or Pending.
+              </CardDescription>
+            </CardHeader>
+
+            <CardContent className="p-4 pt-0 space-y-3">
+              {/* Filter controls & Bulk actions */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground font-medium">Filter:</span>
+                  <Button
+                    type="button"
+                    variant={dailyServiceFilter === 'all' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setDailyServiceFilter('all')}
+                    className="h-7 text-xs px-2.5"
+                  >
+                    All ({dailyMetrics.serviceItems.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={dailyServiceFilter === 'pending' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setDailyServiceFilter('pending')}
+                    className="h-7 text-xs px-2.5"
+                  >
+                    Pending ({dailyMetrics.serviceItems.filter((i) => i.status !== 'Settled').length})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={dailyServiceFilter === 'settled' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setDailyServiceFilter('settled')}
+                    className="h-7 text-xs px-2.5"
+                  >
+                    Settled ({dailyMetrics.serviceItems.filter((i) => i.status === 'Settled').length})
+                  </Button>
+                </div>
+
+                {dailyMetrics.servicePending > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => handleBulkSetServiceSettlement(dailyMetrics.serviceItems, 'Settled')}
+                    className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    Mark All Today as Settled
+                  </Button>
+                )}
+              </div>
+
+              {dailyMetrics.serviceItems.length === 0 ? (
+                <div className="py-6 text-center text-xs text-muted-foreground flex flex-col items-center gap-1">
+                  <CheckCircle2 className="h-6 w-6 text-muted-foreground/60" />
+                  <span>No line items under category "Service" found in invoices for {format(new Date(dailyDate), 'dd-MMM-yyyy')}.</span>
+                </div>
+              ) : (
+                <div className="border rounded-lg overflow-x-auto">
+                  <Table className="text-xs">
+                    <TableHeader className="bg-muted/40">
+                      <TableRow>
+                        <TableHead>Invoice #</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Service / Labor Item</TableHead>
+                        <TableHead className="text-center">Qty</TableHead>
+                        <TableHead className="text-right">Rate</TableHead>
+                        <TableHead className="text-right">Total Amount</TableHead>
+                        <TableHead className="text-center">Status</TableHead>
+                        <TableHead className="text-center">Settlement Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {dailyMetrics.serviceItems
+                        .filter((i) => {
+                          if (dailyServiceFilter === 'pending') return i.status !== 'Settled';
+                          if (dailyServiceFilter === 'settled') return i.status === 'Settled';
+                          return true;
+                        })
+                        .map((item) => (
+                          <TableRow key={item.id}>
+                            <TableCell className="font-mono font-bold text-primary">
+                              #{item.invoiceNumber}
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-medium">{item.customerName}</div>
+                              {item.customerMobile && (
+                                <div className="text-[10px] text-muted-foreground font-mono">{item.customerMobile}</div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-medium text-foreground">{item.productName}</div>
+                              <span className="text-[10px] text-muted-foreground">Category: {item.category}</span>
+                            </TableCell>
+                            <TableCell className="text-center font-mono">{item.quantity}</TableCell>
+                            <TableCell className="text-right font-mono">₹{item.price.toLocaleString()}</TableCell>
+                            <TableCell className="text-right font-mono font-bold text-foreground">
+                              ₹{item.total.toLocaleString()}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {item.status === 'Settled' ? (
+                                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 text-[10px] gap-1 font-medium">
+                                  <CheckCircle2 className="h-3 w-3" /> Settled
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 text-[10px] gap-1 font-medium">
+                                  <Clock className="h-3 w-3" /> Pending
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {item.status === 'Settled' ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleToggleServiceSettlement(item)}
+                                  className="h-6 text-[11px] gap-1 border-amber-300 text-amber-700 hover:bg-amber-50"
+                                  title="Click to revert back to Pending"
+                                >
+                                  <RotateCcw className="h-3 w-3" />
+                                  Mark Pending
+                                </Button>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  onClick={() => handleToggleServiceSettlement(item)}
+                                  className="h-6 text-[11px] gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                >
+                                  <Check className="h-3 w-3" />
+                                  Mark Settled
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Pending Dues to Track (Daily) */}
           <Card className="border-amber-200 dark:border-amber-900/60">
             <CardHeader className="p-4 pb-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
                   <Clock className="h-5 w-5" />
-                  <CardTitle className="text-base">3. Pending Credit Bills to Track Today</CardTitle>
+                  <CardTitle className="text-base">4. Pending Credit Bills to Track Today</CardTitle>
                 </div>
                 <Badge variant="outline" className="text-amber-700 border-amber-300">
                   {dailyMetrics.pendingSalesList.length} Unsettled Bills (₹{dailyMetrics.totalPendingToday.toLocaleString()})
@@ -1144,7 +1700,7 @@ export default function ChecklistPage() {
             <CardHeader className="p-4 pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <ClipboardCheck className="h-5 w-5 text-primary" />
-                4. End-of-Day Checklist & Verification
+                5. End-of-Day Checklist & Verification
               </CardTitle>
               <CardDescription className="text-xs">
                 Check off daily operational controls to lock the day's records.
@@ -1166,6 +1722,14 @@ export default function ChecklistPage() {
                     onCheckedChange={(c) => setDailyChecks({ ...dailyChecks, upiVerified: !!c })}
                   />
                   <span>UPI / QR collections matched with bank statement</span>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-2 rounded-lg border bg-card hover:bg-muted/40 cursor-pointer transition-colors">
+                  <Checkbox
+                    checked={dailyChecks.serviceSettled}
+                    onCheckedChange={(c) => setDailyChecks({ ...dailyChecks, serviceSettled: !!c })}
+                  />
+                  <span>Category Service / Labor charges reviewed & marked Settled</span>
                 </label>
 
                 <label className="flex items-center gap-2.5 p-2 rounded-lg border bg-card hover:bg-muted/40 cursor-pointer transition-colors">
@@ -1211,6 +1775,380 @@ export default function ChecklistPage() {
                 Save & Finalize Today's Settlement Audit
               </Button>
             </CardFooter>
+          </Card>
+        </TabsContent>
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            TAB: SERVICE SETTLEMENTS (SEPARATE DAILY / WEEKLY / MONTHLY AUDIT)
+        ══════════════════════════════════════════════════════════════════════ */}
+        <TabsContent value="services" className="space-y-4">
+          {/* Controls Bar: Period Scope & Date Selector */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl border bg-card shadow-sm">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                <Wrench className="h-4 w-4 text-cyan-600" />
+                Settlement View:
+              </span>
+              <div className="flex items-center gap-1 bg-muted/60 p-0.5 rounded-lg border">
+                <Button
+                  type="button"
+                  variant={servicesTabPeriod === 'daily' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setServicesTabPeriod('daily')}
+                  className="h-7 text-xs px-2.5"
+                >
+                  Daily
+                </Button>
+                <Button
+                  type="button"
+                  variant={servicesTabPeriod === 'weekly' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setServicesTabPeriod('weekly')}
+                  className="h-7 text-xs px-2.5"
+                >
+                  Weekly
+                </Button>
+                <Button
+                  type="button"
+                  variant={servicesTabPeriod === 'monthly' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setServicesTabPeriod('monthly')}
+                  className="h-7 text-xs px-2.5"
+                >
+                  Monthly
+                </Button>
+                <Button
+                  type="button"
+                  variant={servicesTabPeriod === 'all' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setServicesTabPeriod('all')}
+                  className="h-7 text-xs px-2.5"
+                >
+                  All Time
+                </Button>
+              </div>
+
+              {/* Date Controls per scope */}
+              {servicesTabPeriod === 'daily' && (
+                <div className="flex items-center gap-1.5 ml-1">
+                  <Input
+                    type="date"
+                    value={dailyDate}
+                    onChange={(e) => setDailyDate(e.target.value)}
+                    className="h-7 text-xs w-32"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDailyDate(format(new Date(), 'yyyy-MM-dd'))}
+                    className="h-7 text-xs px-2"
+                  >
+                    Today
+                  </Button>
+                </div>
+              )}
+
+              {servicesTabPeriod === 'weekly' && (
+                <div className="flex items-center gap-1.5 ml-1">
+                  <span className="text-xs font-medium text-foreground">
+                    {format(weekInterval.start, 'dd-MMM')} — {format(weekInterval.end, 'dd-MMM-yyyy')}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setWeeklyReferenceDate(subDays(weeklyReferenceDate, 7))}
+                    className="h-7 text-xs px-2"
+                  >
+                    Prev
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setWeeklyReferenceDate(new Date())}
+                    className="h-7 text-xs px-2"
+                  >
+                    Current
+                  </Button>
+                </div>
+              )}
+
+              {servicesTabPeriod === 'monthly' && (
+                <div className="flex items-center gap-1.5 ml-1">
+                  <span className="text-xs font-medium text-foreground font-semibold">
+                    {format(monthlyDate, 'MMMM yyyy')}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setMonthlyDate(subDays(startOfMonth(monthlyDate), 5))}
+                    className="h-7 text-xs px-2"
+                  >
+                    Prev
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setMonthlyDate(new Date())}
+                    className="h-7 text-xs px-2"
+                  >
+                    Current
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleSendWhatsAppServiceSettlementSummary}
+              className="h-7 text-xs gap-1.5 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-50"
+            >
+              <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
+              WhatsApp Settlement Summary
+            </Button>
+          </div>
+
+          {/* Metric Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card className="border-cyan-200 dark:border-cyan-900/40 bg-gradient-to-br from-cyan-500/10 via-card to-card">
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs text-muted-foreground flex justify-between">
+                  <span>Total Service Billed</span>
+                  <Wrench className="h-3.5 w-3.5 text-cyan-600" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <div className="text-lg md:text-xl font-bold font-mono text-cyan-700 dark:text-cyan-400">
+                  ₹{scopedServiceMetrics.total.toLocaleString()}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{scopedServiceMetrics.items.length} service jobs</p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-emerald-200 dark:border-emerald-900/40 bg-gradient-to-br from-emerald-500/10 via-card to-card">
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs text-muted-foreground flex justify-between">
+                  <span>Settled Amount</span>
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <div className="text-lg md:text-xl font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  ₹{scopedServiceMetrics.settled.toLocaleString()}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{scopedServiceMetrics.settledCount} jobs cleared</p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-amber-200 dark:border-amber-900/40 bg-gradient-to-br from-amber-500/10 via-card to-card">
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs text-muted-foreground flex justify-between">
+                  <span>Pending to Settle</span>
+                  <Clock className="h-3.5 w-3.5 text-amber-600" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <div className="text-lg md:text-xl font-bold font-mono text-amber-600 dark:text-amber-400">
+                  ₹{scopedServiceMetrics.pending.toLocaleString()}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{scopedServiceMetrics.pendingCount} jobs unsettled</p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-purple-200 dark:border-purple-900/40 bg-gradient-to-br from-purple-500/10 via-card to-card">
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs text-muted-foreground flex justify-between">
+                  <span>Settlement Progress</span>
+                  <Percent className="h-3.5 w-3.5 text-purple-600" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <div className="text-lg md:text-xl font-bold font-mono text-purple-700 dark:text-purple-400">
+                  {scopedServiceMetrics.rate}%
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {scopedServiceMetrics.pendingCount === 0 ? '100% Fully Settled' : `${scopedServiceMetrics.pendingCount} pending payout`}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Search, Status Filter & Table Card */}
+          <Card className="border-border shadow-sm">
+            <CardHeader className="p-4 pb-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <span>Service Item Records</span>
+                    <Badge variant="outline" className="text-xs">
+                      {displayedServiceItems.length} found
+                    </Badge>
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Invoices containing labor, repairs, washing, or custom service jobs. Mark individual jobs as Settled or Pending.
+                  </CardDescription>
+                </div>
+
+                {scopedServiceMetrics.pendingCount > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => handleBulkSetServiceSettlement(displayedServiceItems, 'Settled')}
+                    className="h-8 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white self-start sm:self-auto"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    Mark All Filtered as Settled
+                  </Button>
+                )}
+              </div>
+
+              {/* Search & Filter pills */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-3 border-t">
+                <div className="relative w-full sm:w-72">
+                  <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by customer, invoice #, service..."
+                    value={servicesTabSearch}
+                    onChange={(e) => setServicesTabSearch(e.target.value)}
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground">Status:</span>
+                  <Button
+                    type="button"
+                    variant={servicesTabFilter === 'all' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setServicesTabFilter('all')}
+                    className="h-7 text-xs px-2.5"
+                  >
+                    All ({scopedServiceMetrics.items.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={servicesTabFilter === 'pending' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setServicesTabFilter('pending')}
+                    className="h-7 text-xs px-2.5 text-amber-700 border-amber-300"
+                  >
+                    Pending ({scopedServiceMetrics.pendingCount})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={servicesTabFilter === 'settled' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setServicesTabFilter('settled')}
+                    className="h-7 text-xs px-2.5 text-emerald-700 border-emerald-300"
+                  >
+                    Settled ({scopedServiceMetrics.settledCount})
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+
+            <CardContent className="p-4 pt-0">
+              {displayedServiceItems.length === 0 ? (
+                <div className="py-8 text-center text-xs text-muted-foreground flex flex-col items-center gap-1.5">
+                  <Wrench className="h-7 w-7 text-muted-foreground/60" />
+                  <span className="font-semibold text-foreground">No matching service items found</span>
+                  <span>Try clearing your search query or selecting a different period scope.</span>
+                </div>
+              ) : (
+                <div className="border rounded-lg overflow-x-auto">
+                  <Table className="text-xs">
+                    <TableHeader className="bg-muted/40">
+                      <TableRow>
+                        <TableHead>Invoice #</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Service Description</TableHead>
+                        <TableHead className="text-center">Qty</TableHead>
+                        <TableHead className="text-right">Rate (₹)</TableHead>
+                        <TableHead className="text-right">Total (₹)</TableHead>
+                        <TableHead className="text-center">Mode</TableHead>
+                        <TableHead className="text-center">Status</TableHead>
+                        <TableHead className="text-center">Settlement Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {displayedServiceItems.map((item) => (
+                        <TableRow key={item.id}>
+                          <TableCell className="font-mono font-bold text-primary">
+                            #{item.invoiceNumber}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground whitespace-nowrap">
+                            {format(new Date(item.date), 'dd-MMM-yyyy')}
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium text-foreground">{item.customerName}</div>
+                            {item.customerMobile && (
+                              <div className="text-[10px] text-muted-foreground font-mono">{item.customerMobile}</div>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium text-foreground">{item.productName}</div>
+                            <span className="text-[10px] text-muted-foreground">Category: {item.category}</span>
+                          </TableCell>
+                          <TableCell className="text-center font-mono">{item.quantity}</TableCell>
+                          <TableCell className="text-right font-mono">₹{item.price.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono font-bold text-foreground">
+                            ₹{item.total.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline" className="text-[10px] font-normal">
+                              {item.paymentMode}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {item.status === 'Settled' ? (
+                              <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 text-[10px] gap-1 font-medium">
+                                <CheckCircle2 className="h-3 w-3" /> Settled
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 text-[10px] gap-1 font-medium">
+                                <Clock className="h-3 w-3" /> Pending
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {item.status === 'Settled' ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleToggleServiceSettlement(item)}
+                                className="h-6 text-[11px] gap-1 border-amber-300 text-amber-700 hover:bg-amber-50"
+                                title="Click to revert back to Pending"
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                                Mark Pending
+                              </Button>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => handleToggleServiceSettlement(item)}
+                                className="h-6 text-[11px] gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                              >
+                                <Check className="h-3 w-3" />
+                                Mark Settled
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
           </Card>
         </TabsContent>
 
@@ -1302,6 +2240,111 @@ export default function ChecklistPage() {
                   </CardContent>
                 </Card>
               </div>
+
+              {/* Category: Service Settlements (Weekly Overview) */}
+              <Card className="border-cyan-200 dark:border-cyan-900/40 bg-gradient-to-br from-cyan-500/10 via-card to-card">
+                <CardHeader className="p-4 pb-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-cyan-800 dark:text-cyan-300">
+                      <Wrench className="h-5 w-5 text-cyan-600" />
+                      <CardTitle className="text-base">Weekly Category: Service Settlements</CardTitle>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="outline" className="text-cyan-700 dark:text-cyan-300 border-cyan-300 font-mono text-xs">
+                        Total: ₹{weeklyMetrics.serviceTotal.toLocaleString()}
+                      </Badge>
+                      <Badge variant="outline" className="text-emerald-700 dark:text-emerald-300 border-emerald-300 font-mono text-xs">
+                        Settled: ₹{weeklyMetrics.serviceSettled.toLocaleString()}
+                      </Badge>
+                      <Badge variant="outline" className="text-amber-700 dark:text-amber-300 border-amber-300 font-mono text-xs">
+                        Pending: ₹{weeklyMetrics.servicePending.toLocaleString()}
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowWeeklyServices(!showWeeklyServices)}
+                        className="h-7 text-xs gap-1"
+                      >
+                        <span>{showWeeklyServices ? 'Hide Services' : 'View Services'}</span>
+                        {showWeeklyServices ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <CardDescription className="text-xs">
+                    Weekly labor & service income summary. Review and settle individual service jobs.
+                  </CardDescription>
+                </CardHeader>
+                {showWeeklyServices && (
+                  <CardContent className="p-4 pt-1 space-y-3">
+                    {weeklyMetrics.serviceItems.length === 0 ? (
+                      <div className="py-4 text-center text-xs text-muted-foreground">
+                        No service category items billed this week.
+                      </div>
+                    ) : (
+                      <div className="border rounded-lg overflow-x-auto">
+                        <Table className="text-xs">
+                          <TableHeader className="bg-muted/40">
+                            <TableRow>
+                              <TableHead>Invoice #</TableHead>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Customer</TableHead>
+                              <TableHead>Service Item</TableHead>
+                              <TableHead className="text-right">Total</TableHead>
+                              <TableHead className="text-center">Status</TableHead>
+                              <TableHead className="text-center">Settlement Action</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {weeklyMetrics.serviceItems.map((item) => (
+                              <TableRow key={item.id}>
+                                <TableCell className="font-mono font-bold text-primary">#{item.invoiceNumber}</TableCell>
+                                <TableCell className="text-muted-foreground whitespace-nowrap">{format(new Date(item.date), 'dd-MMM')}</TableCell>
+                                <TableCell className="font-medium">{item.customerName}</TableCell>
+                                <TableCell>{item.productName}</TableCell>
+                                <TableCell className="text-right font-mono font-bold">₹{item.total.toLocaleString()}</TableCell>
+                                <TableCell className="text-center">
+                                  {item.status === 'Settled' ? (
+                                    <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/30 text-[10px] gap-1">
+                                      <CheckCircle2 className="h-3 w-3" /> Settled
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-500/30 text-[10px] gap-1">
+                                      <Clock className="h-3 w-3" /> Pending
+                                    </Badge>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-center">
+                                  {item.status === 'Settled' ? (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleToggleServiceSettlement(item)}
+                                      className="h-6 text-[11px] gap-1 border-amber-300 text-amber-700 hover:bg-amber-50"
+                                    >
+                                      <RotateCcw className="h-3 w-3" /> Mark Pending
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      onClick={() => handleToggleServiceSettlement(item)}
+                                      className="h-6 text-[11px] gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    >
+                                      <Check className="h-3 w-3" /> Mark Settled
+                                    </Button>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </CardContent>
+                )}
+              </Card>
 
               {/* WHERE ARE WE LACKING? (Actionable Diagnosis) */}
               <Card className="border-indigo-300 dark:border-indigo-800 bg-gradient-to-br from-indigo-50/50 via-card to-card">
@@ -1470,6 +2513,111 @@ export default function ChecklistPage() {
                   </CardContent>
                 </Card>
               </div>
+
+              {/* Monthly Service Settlements Card */}
+              <Card className="border-cyan-200 dark:border-cyan-900 bg-gradient-to-br from-cyan-50/40 via-card to-card">
+                <CardHeader className="p-4 pb-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-cyan-800 dark:text-cyan-300">
+                      <Wrench className="h-5 w-5 text-cyan-600" />
+                      <CardTitle className="text-base">Monthly Category: Service Settlements</CardTitle>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="outline" className="text-cyan-700 dark:text-cyan-300 border-cyan-300 font-mono text-xs">
+                        Total: ₹{monthlyMetrics.serviceTotal.toLocaleString()}
+                      </Badge>
+                      <Badge variant="outline" className="text-emerald-700 dark:text-emerald-300 border-emerald-300 font-mono text-xs">
+                        Settled: ₹{monthlyMetrics.serviceSettled.toLocaleString()}
+                      </Badge>
+                      <Badge variant="outline" className="text-amber-700 dark:text-amber-300 border-amber-300 font-mono text-xs">
+                        Pending: ₹{monthlyMetrics.servicePending.toLocaleString()}
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowMonthlyServices(!showMonthlyServices)}
+                        className="h-7 text-xs gap-1"
+                      >
+                        <span>{showMonthlyServices ? 'Hide Services' : 'View Services'}</span>
+                        {showMonthlyServices ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <CardDescription className="text-xs">
+                    Monthly labor & service income summary. Review and settle individual service jobs across this month.
+                  </CardDescription>
+                </CardHeader>
+                {showMonthlyServices && (
+                  <CardContent className="p-4 pt-1 space-y-3">
+                    {monthlyMetrics.serviceItems.length === 0 ? (
+                      <div className="py-4 text-center text-xs text-muted-foreground">
+                        No service category items billed this month.
+                      </div>
+                    ) : (
+                      <div className="border rounded-lg overflow-x-auto">
+                        <Table className="text-xs">
+                          <TableHeader className="bg-muted/40">
+                            <TableRow>
+                              <TableHead>Invoice #</TableHead>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Customer</TableHead>
+                              <TableHead>Service Item</TableHead>
+                              <TableHead className="text-right">Total</TableHead>
+                              <TableHead className="text-center">Status</TableHead>
+                              <TableHead className="text-center">Settlement Action</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {monthlyMetrics.serviceItems.map((item) => (
+                              <TableRow key={item.id}>
+                                <TableCell className="font-mono font-bold text-primary">#{item.invoiceNumber}</TableCell>
+                                <TableCell className="text-muted-foreground whitespace-nowrap">{format(new Date(item.date), 'dd-MMM')}</TableCell>
+                                <TableCell className="font-medium">{item.customerName}</TableCell>
+                                <TableCell>{item.productName}</TableCell>
+                                <TableCell className="text-right font-mono font-bold">₹{item.total.toLocaleString()}</TableCell>
+                                <TableCell className="text-center">
+                                  {item.status === 'Settled' ? (
+                                    <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/30 text-[10px] gap-1">
+                                      <CheckCircle2 className="h-3 w-3" /> Settled
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-500/30 text-[10px] gap-1">
+                                      <Clock className="h-3 w-3" /> Pending
+                                    </Badge>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-center">
+                                  {item.status === 'Settled' ? (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleToggleServiceSettlement(item)}
+                                      className="h-6 text-[11px] gap-1 border-amber-300 text-amber-700 hover:bg-amber-50"
+                                    >
+                                      <RotateCcw className="h-3 w-3" /> Mark Pending
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      onClick={() => handleToggleServiceSettlement(item)}
+                                      className="h-6 text-[11px] gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    >
+                                      <Check className="h-3 w-3" /> Mark Settled
+                                    </Button>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </CardContent>
+                )}
+              </Card>
 
               {/* Monthly Checklist Card */}
               <Card>

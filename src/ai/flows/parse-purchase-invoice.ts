@@ -17,14 +17,22 @@ const prompt = ai.definePrompt({
   name: 'parsePurchaseInvoicePrompt',
   input: { schema: ParsePurchaseInvoiceInputSchema },
   output: { schema: ParsePurchaseInvoiceOutputSchema },
-  system: `You are an expert OCR AI invoice parser for an automobile parts business.
+  system: `You are an expert OCR AI invoice parser for an automobile parts and retail business.
 Analyze the provided purchase invoice image/document carefully.
 Extract all relevant fields into structured JSON matching the output schema:
 1. Supplier / Vendor Name
 2. Invoice / Bill Number
 3. Invoice Date (convert to YYYY-MM-DD format if possible)
-4. Line Items: Extract each product item with its Product Name, Quantity, Unit Purchase Price, GST Percentage, and Line Item Total with GST.
-5. Grand Total Amount.
+4. GST Tax Mode: Set isGstIncluded to true if the unit prices printed on invoice already include GST/taxes (e.g. retail cash memos, invoices with 'Incl. of all taxes', or where line total equals Qty * Rate), or false if GST is calculated separately and added on top of unit rates.
+5. Line Items: Extract each product item with:
+   - Product Name (description of the part/product)
+   - Part Number / Item Code / SKU / Barcode: Look for columns like 'Part No', 'Part Number', 'Item Code', 'Article No', 'SKU', or 'Barcode'. Extract this into partNumber.
+   - Quantity: Number of units purchased
+   - Unit Purchase Price: Rate or unit price as printed on the invoice
+   - GST Percentage: Tax rate (e.g. 28, 18, 12, 5, 0)
+   - Line Item Total with GST: Total amount for this item including GST
+   - MRP (Maximum Retail Price): If printed on invoice (often in a dedicated 'MRP' column), extract it into mrp (to be used as selling price).
+6. Grand Total Amount.
 
 If any field is missing or unreadable, provide a best-effort estimate or sensible default (e.g. GST % default to 18 if unspecified, Date default to today's date).`,
   prompt: `Please parse this purchase invoice document:\n{{media url=imageDataUrl}}`,
