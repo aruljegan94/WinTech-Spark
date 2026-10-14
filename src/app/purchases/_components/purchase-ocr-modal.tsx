@@ -308,6 +308,24 @@ export function PurchaseOcrModal({
   const totalCalculatedAmount =
     Math.round(items.reduce((sum, item) => sum + (item.amountWithGst || 0), 0) * 100) / 100;
 
+  // Deep sanitizer to ensure no `undefined` values ever reach Firestore
+  const sanitizeForFirestore = <T,>(val: T): T => {
+    if (val === undefined) return null as unknown as T;
+    if (Array.isArray(val)) {
+      return val.map((item) => sanitizeForFirestore(item)) as unknown as T;
+    }
+    if (val !== null && typeof val === 'object') {
+      const cleaned: Record<string, any> = {};
+      for (const [k, v] of Object.entries(val)) {
+        if (v !== undefined) {
+          cleaned[k] = sanitizeForFirestore(v);
+        }
+      }
+      return cleaned as T;
+    }
+    return val;
+  };
+
   const handleConfirmPurchase = async () => {
     if (!firestore) return;
     if (!supplierName.trim()) {
@@ -354,73 +372,97 @@ export function PurchaseOcrModal({
         }> = [];
 
         enriched.forEach(({ item, isNew, existingRef, newRef }, index) => {
+          const qty = Number(item.quantity) || 1;
+          const unitRate = Number(item.purchasePrice) || 0;
+          const gstPct = Number(item.gstPercentage) || 0;
           const basePurchasePrice = getBasePurchasePrice(
-            item.purchasePrice,
-            item.gstPercentage,
+            unitRate,
+            gstPct,
             isGstIncluded
           );
           const finalSellingPrice =
-            item.sellingPrice || item.mrp || Math.round(basePurchasePrice * 1.25);
-          const partNoBarcode = item.partNumber.trim();
+            Number(item.sellingPrice) || Number(item.mrp) || Math.round(basePurchasePrice * 1.25);
+          const partNoBarcode = (item.partNumber || '').trim();
+          const cleanName = (item.productName || '').trim() || 'Unspecified Part';
+          const lineTotal =
+            Number(item.amountWithGst) ||
+            calculateItemTotal(qty, unitRate, gstPct, isGstIncluded);
+
+          const itemEntry: {
+            productId: string;
+            productName: string;
+            barcode?: string;
+            quantity: number;
+            purchasePrice: number;
+            totalAmount: number;
+          } = {
+            productId: isNew && newRef ? newRef.id : (existingRef?.id || ''),
+            productName: cleanName,
+            quantity: qty,
+            purchasePrice: unitRate,
+            totalAmount: lineTotal,
+          };
+          if (partNoBarcode) {
+            itemEntry.barcode = partNoBarcode;
+          }
 
           if (isNew && newRef) {
             // Create brand-new product with SKU/barcode and selling price
-            transaction.set(newRef, {
-              productName: item.productName,
+            transaction.set(newRef, sanitizeForFirestore({
+              productName: cleanName,
               barcode: partNoBarcode || '',
               category: 'General',
               purchasePrice: basePurchasePrice,
               sellingPrice: finalSellingPrice,
-              stockQuantity: item.quantity,
-              gstPercentage: item.gstPercentage,
-            });
-            finalItems.push({
-              productId: newRef.id,
-              productName: item.productName,
-              barcode: partNoBarcode || undefined,
-              quantity: item.quantity,
-              purchasePrice: item.purchasePrice,
-              totalAmount: item.amountWithGst,
-            });
+              stockQuantity: qty,
+              gstPercentage: gstPct,
+            }));
+            finalItems.push(itemEntry);
           } else if (existingRef) {
             // Update stock and prices on existing product
             const prodDoc = productDocs[index];
             if (prodDoc?.exists()) {
-              const currentStock = prodDoc.data().stockQuantity || 0;
+              const currentStock = Number(prodDoc.data()?.stockQuantity) || 0;
               const updateData: Record<string, any> = {
-                stockQuantity: currentStock + item.quantity,
+                stockQuantity: currentStock + qty,
                 purchasePrice: basePurchasePrice,
               };
               // Set barcode if existing product lacks one and partNo is present
-              if (!prodDoc.data().barcode && partNoBarcode) {
+              if (!prodDoc.data()?.barcode && partNoBarcode) {
                 updateData.barcode = partNoBarcode;
               }
               // Update selling price if extracted from MRP or specified
-              if (item.sellingPrice && item.sellingPrice > 0) {
+              if (item.sellingPrice && Number(item.sellingPrice) > 0) {
                 updateData.sellingPrice = finalSellingPrice;
               }
-              transaction.update(existingRef, updateData);
+              transaction.update(existingRef, sanitizeForFirestore(updateData));
             }
-            finalItems.push({
-              productId: existingRef.id,
-              productName: item.productName,
-              barcode: partNoBarcode || undefined,
-              quantity: item.quantity,
-              purchasePrice: item.purchasePrice,
-              totalAmount: item.amountWithGst,
-            });
+            finalItems.push(itemEntry);
           }
         });
 
+        let safeIsoDate = new Date().toISOString();
+        if (purchaseDate) {
+          const d = new Date(purchaseDate);
+          if (!isNaN(d.getTime())) {
+            safeIsoDate = d.toISOString();
+          }
+        }
+
         // Record the purchase document (final write)
-        transaction.set(purchaseRef, {
-          supplierName,
-          invoiceNo: invoiceNo || `OCR-${Date.now().toString().slice(-6)}`,
-          date: new Date(purchaseDate).toISOString(),
+        transaction.set(purchaseRef, sanitizeForFirestore({
+          supplierName: supplierName.trim() || 'Unknown Supplier',
+          invoiceNo: invoiceNo?.trim() || `OCR-${Date.now().toString().slice(-6)}`,
+          date: safeIsoDate,
           items: finalItems,
-          totalAmount: totalCalculatedAmount,
-          isGstIncluded,
-        });
+          totalAmount: Number(totalCalculatedAmount) || 0,
+          isGstIncluded: Boolean(isGstIncluded),
+          paymentStatus: 'Pending',
+          amountPaid: 0,
+          discount: 0,
+          dueDate: null,
+          paymentNotes: 'Imported via AI Invoice Scanner',
+        }));
       });
 
       toast({
