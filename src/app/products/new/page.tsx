@@ -41,6 +41,8 @@ const productSchema = z.object({
   gstPercentage: z.coerce.number().min(0).max(100, 'GST must be between 0 and 100'),
   barcode: z.string().optional(),
   markupPercentage: z.coerce.number().optional(),
+  isGstIncluded: z.boolean().optional(),
+  basePurchasePrice: z.coerce.number().optional(),
 });
 
 type ProductFormValues = z.infer<typeof productSchema>;
@@ -62,6 +64,8 @@ export default function NewProductPage() {
       gstPercentage: 0,
       barcode: '',
       markupPercentage: 30,
+      isGstIncluded: false,
+      basePurchasePrice: 0,
     },
   });
 
@@ -69,8 +73,21 @@ export default function NewProductPage() {
     if (!firestore) return;
 
     try {
+      const isGstIncluded = Boolean(data.isGstIncluded);
+      const baseCost = isGstIncluded && data.gstPercentage > 0
+        ? Math.round(((data.purchasePrice / (1 + data.gstPercentage / 100)) + Number.EPSILON) * 100) / 100
+        : data.purchasePrice;
+      const cleanSellingPrice = Math.round((data.sellingPrice + Number.EPSILON) * 100) / 100;
+
+      const productPayload = {
+        ...data,
+        sellingPrice: cleanSellingPrice,
+        isGstIncluded,
+        basePurchasePrice: baseCost,
+      };
+
       const productsCollection = collection(firestore, 'products');
-      await addDocumentNonBlocking(productsCollection, data);
+      await addDocumentNonBlocking(productsCollection, productPayload);
 
       toast({
         title: 'Product Added',

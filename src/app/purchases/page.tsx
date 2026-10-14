@@ -19,7 +19,7 @@ import {
 import {
   MoreHorizontal, PlusCircle, Sparkles, CreditCard, Calendar as CalendarIcon,
   Loader2, Wallet, Search, ArrowUpDown, RotateCcw, X, Building2, ExternalLink,
-  CheckCircle2, IndianRupee, AlertTriangle, ArrowRight
+  CheckCircle2, IndianRupee, AlertTriangle, ArrowRight, Pencil
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -726,6 +726,11 @@ export default function PurchasesPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                            <DropdownMenuItem asChild>
+                              <Link href={`/purchases/edit/${purchase.id}`}>
+                                <Pencil className="mr-2 h-4 w-4 text-blue-600 dark:text-blue-400" /> Edit Purchase
+                              </Link>
+                            </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => openPaymentModal(purchase)}>
                               <CreditCard className="mr-2 h-4 w-4 text-primary" /> Update Payment
                             </DropdownMenuItem>

@@ -10,6 +10,8 @@ export type Product = {
   gstPercentage: number;
   barcode?: string;
   markupPercentage?: number;
+  isGstIncluded?: boolean;
+  basePurchasePrice?: number;
 };
 
 export type Category = {

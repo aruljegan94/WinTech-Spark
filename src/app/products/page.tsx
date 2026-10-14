@@ -559,9 +559,14 @@ export default function ProductsPage() {
 
               {!isLoading &&
                 products?.map((product) => {
+                  const baseCost =
+                    product.isGstIncluded && product.gstPercentage > 0
+                      ? Math.round(((product.purchasePrice / (1 + product.gstPercentage / 100)) + Number.EPSILON) * 100) / 100
+                      : (product.basePurchasePrice ?? product.purchasePrice);
+
                   const markupPercent =
-                    product.purchasePrice > 0
-                      ? Math.round(((product.sellingPrice - product.purchasePrice) / product.purchasePrice) * 100)
+                    baseCost > 0
+                      ? Math.round(((product.sellingPrice - baseCost) / baseCost) * 100)
                       : null;
 
                   return (
@@ -619,7 +624,14 @@ export default function ProductsPage() {
 
                       {/* Buying Price (Cost) */}
                       <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                        ₹{formatCurrency(product.purchasePrice || 0)}
+                        <div>₹{formatCurrency(product.purchasePrice || 0)}</div>
+                        {product.isGstIncluded && (
+                          <div className="flex justify-end mt-0.5">
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 font-medium">
+                              Incl. GST
+                            </Badge>
+                          </div>
+                        )}
                       </TableCell>
 
                       {/* Selling Price (MRP) + Margin */}
@@ -627,9 +639,15 @@ export default function ProductsPage() {
                         <div className="font-bold font-mono text-xs text-foreground">
                           ₹{formatCurrency(product.sellingPrice)}
                         </div>
-                        {markupPercent !== null && markupPercent > 0 && (
-                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                            +{markupPercent}%
+                        {markupPercent !== null && (
+                          <span className={`text-[10px] font-medium ${
+                            markupPercent > 0 
+                              ? 'text-emerald-600 dark:text-emerald-400' 
+                              : markupPercent < 0 
+                              ? 'text-rose-600' 
+                              : 'text-muted-foreground'
+                          }`}>
+                            {markupPercent >= 0 ? `+${markupPercent}%` : `${markupPercent}%`}
                           </span>
                         )}
                       </TableCell>

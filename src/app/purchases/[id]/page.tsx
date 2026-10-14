@@ -26,6 +26,8 @@ import {
 import { format } from 'date-fns';
 import { notFound } from 'next/navigation';
 import { formatCurrency } from '@/lib/utils';
+import Link from 'next/link';
+import { Pencil } from 'lucide-react';
 
 export default function PurchaseDetailsPage() {
   const firestore = useFirestore();
@@ -96,9 +98,16 @@ export default function PurchaseDetailsPage() {
         title={`Invoice #${purchase.invoiceNo}`}
         description={`Details for the purchase from ${purchase.supplierName}.`}
       >
-        <Button variant="outline" onClick={() => router.back()}>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => router.back()}>
             Back to Purchases
-        </Button>
+          </Button>
+          <Button asChild className="gap-1.5 font-semibold">
+            <Link href={`/purchases/edit/${purchase.id}`}>
+              <Pencil className="h-4 w-4" /> Edit Purchase
+            </Link>
+          </Button>
+        </div>
       </PageHeader>
       <div className="space-y-4">
         <Card>

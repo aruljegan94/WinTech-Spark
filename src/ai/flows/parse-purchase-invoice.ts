@@ -38,6 +38,47 @@ If any field is missing or unreadable, provide a best-effort estimate or sensibl
   prompt: `Please parse this purchase invoice document:\n{{media url=imageDataUrl}}`,
 });
 
+function sanitizeError(err: any): Error {
+  const rawMsg = err?.message || String(err || 'Unknown error');
+  // Strip out any query param containing key=AIza... or any api key
+  let sanitized = rawMsg
+    .replace(/([?&]key=)[a-zA-Z0-9_\-]+/gi, '$1[REDACTED]')
+    .replace(/AIza[a-zA-Z0-9_\-]{35}/g, '[REDACTED_API_KEY]');
+
+  if (
+    sanitized.includes('403') ||
+    sanitized.includes('leaked') ||
+    sanitized.includes('API key not valid') ||
+    sanitized.includes('PERMISSION_DENIED')
+  ) {
+    return new Error(
+      'Gemini API key is invalid or unauthorized. Please verify GEMINI_API_KEY in your environment configuration.'
+    );
+  }
+  if (
+    sanitized.includes('503') ||
+    sanitized.includes('high demand') ||
+    sanitized.includes('Service Unavailable')
+  ) {
+    return new Error(
+      'AI service is currently busy due to temporary high demand. Please try scanning again in a few moments, or enter item details manually.'
+    );
+  }
+  if (
+    sanitized.includes('429') ||
+    sanitized.includes('quota') ||
+    sanitized.includes('RESOURCE_EXHAUSTED')
+  ) {
+    return new Error(
+      'Gemini API quota reached. Please wait a moment before trying again.'
+    );
+  }
+
+  // Generic sanitized error without sensitive request URLs or keys
+  const cleanSummary = sanitized.split('\n')[0].slice(0, 250);
+  return new Error(cleanSummary || 'Failed to scan and parse purchase invoice.');
+}
+
 const parsePurchaseInvoiceFlow = ai.defineFlow(
   {
     name: 'parsePurchaseInvoiceFlow',
@@ -45,48 +86,45 @@ const parsePurchaseInvoiceFlow = ai.defineFlow(
     outputSchema: ParsePurchaseInvoiceOutputSchema,
   },
   async (input) => {
-    try {
-      // Fast and highly available gemini-3.5-flash with fallback to gemini-3.8-flash
-      const candidateModels = ['googleai/gemini-3.5-flash', 'googleai/gemini-3.8-flash'];
-      let output: ParsePurchaseInvoiceOutput | null = null;
-      let lastError: any = null;
+    // Fast and highly available model cascade
+    const candidateModels = [
+      'googleai/gemini-flash-latest',
+      'googleai/gemini-2.5-flash-lite',
+      'googleai/gemini-3.5-flash-lite',
+      'googleai/gemini-3.5-flash',
+      'googleai/gemini-3.7-flash',
+      'googleai/gemini-3.8-flash',
+    ];
+    let output: ParsePurchaseInvoiceOutput | null = null;
+    let lastError: any = null;
 
-      for (const model of candidateModels) {
-        try {
-          const res = await prompt(input, { model });
-          if (res?.output) {
-            output = res.output;
-            break;
-          }
-        } catch (err: any) {
-          console.warn(`[parsePurchaseInvoice] Model ${model} error, attempting fallback:`, err?.message || err);
-          lastError = err;
-          if (
-            err?.message?.includes('leaked') ||
-            err?.message?.includes('403') ||
-            err?.message?.includes('API key not valid')
-          ) {
-            throw err;
-          }
+    for (const model of candidateModels) {
+      try {
+        const res = await prompt(input, { model });
+        if (res?.output) {
+          output = res.output;
+          break;
         }
+      } catch (err: any) {
+        lastError = err;
+        const msg = String(err?.message || '');
+        if (
+          msg.includes('403') ||
+          msg.includes('leaked') ||
+          msg.includes('API key not valid')
+        ) {
+          break;
+        }
+        // Brief pause before trying next fallback model
+        await new Promise((r) => setTimeout(r, 500));
       }
-
-      if (!output) {
-        throw lastError || new Error('Failed to parse purchase invoice document.');
-      }
-      return output;
-    } catch (err: any) {
-      if (
-        err?.message?.includes('leaked') ||
-        err?.message?.includes('403') ||
-        err?.message?.includes('API key')
-      ) {
-        throw new Error(
-          'Gemini API key was revoked by Google ([403 Forbidden] API key reported as leaked). Please update GEMINI_API_KEY in .env.local with a new key from Google AI Studio.'
-        );
-      }
-      throw err;
     }
+
+    if (!output) {
+      throw sanitizeError(lastError || new Error('Failed to parse purchase invoice document.'));
+    }
+
+    return output;
   }
 );
 

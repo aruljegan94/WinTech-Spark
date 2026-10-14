@@ -195,13 +195,16 @@ export function PurchaseOcrModal({
             : 'Extracted invoice items, part numbers, and rates. Review before confirming.',
         });
       } catch (error: any) {
-        console.error('OCR Parsing Error:', error);
-        const msg = error.message || 'Could not parse purchase invoice. Please check the image.';
-        setOcrError(msg);
+        const raw = error?.message || 'Could not parse purchase invoice. Please check the image.';
+        const cleanMsg = raw
+          .replace(/([?&]key=)[a-zA-Z0-9_\-]+/gi, '$1[REDACTED]')
+          .replace(/AIza[a-zA-Z0-9_\-]{35}/g, '[REDACTED_API_KEY]');
+        console.warn('OCR Processing Status:', cleanMsg);
+        setOcrError(cleanMsg);
         toast({
           variant: 'destructive',
           title: 'OCR Analysis Failed',
-          description: msg,
+          description: cleanMsg,
         });
         setStep('upload');
       } finally {

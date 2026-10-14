@@ -43,6 +43,8 @@ const productSchema = z.object({
   gstPercentage: z.coerce.number().min(0).max(100, 'GST must be between 0 and 100'),
   barcode: z.string().optional(),
   markupPercentage: z.coerce.number().optional(),
+  isGstIncluded: z.boolean().optional(),
+  basePurchasePrice: z.coerce.number().optional(),
 });
 
 type ProductFormValues = z.infer<typeof productSchema>;
@@ -72,18 +74,27 @@ export default function EditProductPage() {
       gstPercentage: 0,
       barcode: '',
       markupPercentage: 30,
+      isGstIncluded: false,
+      basePurchasePrice: 0,
     },
   });
 
   useEffect(() => {
     if (product) {
-      const calculatedMarkup = product.purchasePrice > 0
-        ? Math.round(((product.sellingPrice - product.purchasePrice) / product.purchasePrice) * 100 * 10) / 10
+      const isGstIncluded = Boolean(product.isGstIncluded);
+      const baseCost = isGstIncluded && product.gstPercentage > 0
+        ? Math.round(((product.purchasePrice / (1 + product.gstPercentage / 100)) + Number.EPSILON) * 100) / 100
+        : (product.basePurchasePrice ?? product.purchasePrice);
+
+      const calculatedMarkup = baseCost > 0
+        ? Math.round(((product.sellingPrice - baseCost) / baseCost) * 100 * 10) / 10
         : 30;
 
       form.reset({
         ...product,
         barcode: product.barcode || '',
+        isGstIncluded,
+        basePurchasePrice: baseCost,
         markupPercentage: product.markupPercentage ?? calculatedMarkup,
       });
     }
@@ -92,8 +103,21 @@ export default function EditProductPage() {
   const onSubmit = async (data: ProductFormValues) => {
     if (!firestore || !id) return;
     
+    const isGstIncluded = Boolean(data.isGstIncluded);
+    const baseCost = isGstIncluded && data.gstPercentage > 0
+      ? Math.round(((data.purchasePrice / (1 + data.gstPercentage / 100)) + Number.EPSILON) * 100) / 100
+      : data.purchasePrice;
+    const cleanSellingPrice = Math.round((data.sellingPrice + Number.EPSILON) * 100) / 100;
+
+    const payload = {
+      ...data,
+      sellingPrice: cleanSellingPrice,
+      isGstIncluded,
+      basePurchasePrice: baseCost,
+    };
+
     const docRef = doc(firestore, 'products', id as string);
-    setDocumentNonBlocking(docRef, data, { merge: true });
+    setDocumentNonBlocking(docRef, payload, { merge: true });
 
     toast({
       title: 'Product Updated',
