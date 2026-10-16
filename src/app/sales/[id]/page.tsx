@@ -364,7 +364,7 @@ export default function SaleDetailsPage() {
               className="gap-1.5 font-medium border-border/80 shadow-sm"
             >
               <Receipt className="h-4 w-4 text-amber-600" />
-              Thermal Receipt
+              55mm POS Receipt
             </Button>
 
             {/* Download PDF */}

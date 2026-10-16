@@ -104,7 +104,7 @@ export default function SettingsPage() {
   const [isResettingCounter, setIsResettingCounter] = useState(false);
 
   // ── General Preferences (Print format, Payment Mode, etc) ───────────
-  const [defaultPrintMode, setDefaultPrintMode] = useState<'thermal-80' | 'thermal-58' | 'a4'>('thermal-80');
+  const [defaultPrintMode, setDefaultPrintMode] = useState<'thermal-55' | 'a4'>('thermal-55');
   const [defaultPaymentMode, setDefaultPaymentMode] = useState('Cash');
   const [savingGeneral, setSavingGeneral] = useState(false);
 
@@ -732,11 +732,10 @@ export default function SettingsPage() {
                 <CardContent className="p-4 space-y-3 text-xs">
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold">Default Receipt Paper Format</Label>
-                    <div className="grid grid-cols-3 gap-2 pt-1">
+                    <div className="grid grid-cols-2 gap-2 pt-1">
                       {[
-                        { id: 'thermal-80', label: '80mm Thermal', sub: 'Standard Roll' },
-                        { id: 'thermal-58', label: '58mm Thermal', sub: 'Compact Roll' },
-                        { id: 'a4', label: 'A4 Laser', sub: 'Full Sheet' },
+                        { id: 'thermal-55', label: '55mm POSIFLOW', sub: '2" Thermal (Default)' },
+                        { id: 'a4', label: 'A4 Laser', sub: 'Full Sheet PDF' },
                       ].map((mode) => (
                         <div
                           key={mode.id}

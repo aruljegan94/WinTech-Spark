@@ -10,9 +10,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Printer, Check, Usb, AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
+import { Printer, Check, Usb, AlertCircle, RefreshCw, Sparkles, Tag } from 'lucide-react';
 import type { Sale, CompanyProfile } from '@/lib/types';
 import { format } from 'date-fns';
+import { toast } from '@/hooks/use-toast';
 import {
   isWebSerialSupported,
   getConnectedSerialPort,
@@ -22,6 +23,7 @@ import {
   directTestPrintViaWebSerial,
   printReceiptViaIframe,
   printTestReceiptViaIframe,
+  printLabelViaIframe,
 } from '@/lib/thermal-printer';
 
 interface ThermalPrintDialogProps {
@@ -37,19 +39,18 @@ export function ThermalPrintDialog({
   sale,
   companyProfile,
 }: ThermalPrintDialogProps) {
-  const [paperWidth, setPaperWidth] = useState<'58mm' | '80mm'>('80mm');
+  const [paperWidth, setPaperWidth] = useState<'55mm'>('55mm');
   const [hasSerialPort, setHasSerialPort] = useState(false);
   const [isDirectPrinting, setIsDirectPrinting] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [showLabelModal, setShowLabelModal] = useState(false);
+  const [selectedLabelSize, setSelectedLabelSize] = useState<'50x30' | '50x25'>('50x30');
 
   // Load saved paper width on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('spark_preferred_paper_size');
-      if (saved === '58mm' || saved === '80mm') {
-        setPaperWidth(saved);
-      }
+      localStorage.setItem('spark_preferred_paper_size', '55mm');
     }
   }, []);
 
@@ -69,19 +70,12 @@ export function ThermalPrintDialog({
     }
   };
 
-  const handleSetPaperWidth = (width: '58mm' | '80mm') => {
-    setPaperWidth(width);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('spark_preferred_paper_size', width);
-    }
-  };
-
   const handleConnectPort = async () => {
     try {
       setStatusMessage(null);
       await requestSerialPort();
       setHasSerialPort(true);
-      setStatusMessage('Thermal printer connected successfully via USB/Serial!');
+      setStatusMessage('POSIFLOW thermal printer connected successfully via USB/Serial!');
       setTimeout(() => setStatusMessage(null), 3000);
     } catch (err: any) {
       if (err.name !== 'NotFoundError') {
@@ -90,15 +84,14 @@ export function ThermalPrintDialog({
     }
   };
 
-  // 1. Direct Thermal Print (via Web Serial / ESC-POS)
+  // 1. Direct Thermal Print (via Web Serial / ESC-POS at 55mm)
   const handleDirectPrint = async () => {
     setIsDirectPrinting(true);
     setStatusMessage(null);
     try {
-      const is3Inch = paperWidth === '80mm';
-      await directPrintViaWebSerial(sale, companyProfile, is3Inch);
+      await directPrintViaWebSerial(sale, companyProfile, false);
       setHasSerialPort(true);
-      setStatusMessage('Receipt sent directly to thermal printer!');
+      setStatusMessage('Receipt sent directly to POSIFLOW printer (55mm)!');
       setTimeout(() => {
         setIsDirectPrinting(false);
         onOpenChange(false);
@@ -106,36 +99,78 @@ export function ThermalPrintDialog({
     } catch (err: any) {
       setIsDirectPrinting(false);
       console.warn('Direct print failed, falling back to system print:', err);
-      // Fallback to system spooler with exact roll format
+      // Fallback to system spooler with exact 55mm roll format
       handleSystemPrint();
     }
   };
 
-  // 2. System Print (via isolated iframe with exact 80mm / 58mm roll format, Never A4)
+  // 2. System Print (via isolated iframe with exact 55mm POSIFLOW roll format, Never A4)
   const handleSystemPrint = () => {
-    const is3Inch = paperWidth === '80mm';
-    printReceiptViaIframe(sale, companyProfile, is3Inch);
+    printReceiptViaIframe(sale, companyProfile, false);
   };
 
   // 3. Test Print
   const handleTestPrint = async () => {
     setIsTesting(true);
     setStatusMessage(null);
-    const is3Inch = paperWidth === '80mm';
     try {
       if (hasSerialPort) {
-        await directTestPrintViaWebSerial(is3Inch);
-        setStatusMessage('Test receipt printed directly!');
+        await directTestPrintViaWebSerial(false);
+        setStatusMessage('Test receipt printed directly (55mm)!');
       } else {
-        printTestReceiptViaIframe(is3Inch);
-        setStatusMessage('Test receipt sent to system print!');
+        printTestReceiptViaIframe(false);
+        setStatusMessage('Test receipt sent to 55mm system print!');
       }
     } catch (err) {
-      printTestReceiptViaIframe(is3Inch);
+      printTestReceiptViaIframe(false);
     } finally {
       setIsTesting(false);
       setTimeout(() => setStatusMessage(null), 3000);
     }
+  };
+
+  // 4. Print Item Labels for this single order / invoice
+  const handlePrintItemLabels = (size: '50x30' | '50x25') => {
+    const widthMm = 50;
+    const heightMm = size === '50x30' ? 30 : 25;
+    const items = sale.items || [];
+    const labels: string[] = [];
+
+    const compName = companyProfile?.companyName || 'WIN AUTOMOBILES';
+
+    for (const item of items) {
+      const qty = Math.max(1, Math.min(item.quantity || 1, 50));
+      const productName = item.productName || 'Item';
+      const price = Number(item.price || 0).toFixed(2);
+      const barcodeVal = (item as any).barcode || item.productId || 'SKU-ITEM';
+
+      for (let i = 0; i < qty; i++) {
+        labels.push(`
+          <div style="font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 0.5px solid #ccc; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-bottom: 1px;">
+            ${compName}
+          </div>
+          <div style="font-size: 9px; font-weight: 700; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 1px 0;">
+            ${productName}
+          </div>
+          <div style="font-family: monospace; font-size: 11px; font-weight: 900; letter-spacing: 1.5px; padding: 2px 4px; background: #f0f0f0; border-radius: 2px;">
+            *${barcodeVal}*
+          </div>
+          <div style="font-size: 8px; font-weight: 700; width: 100%; display: flex; justify-content: space-between; border-top: 0.5px solid #eee; padding-top: 1px;">
+            <span>MRP: ₹${price}</span>
+            <span>#${sale.invoiceNumber || ''}</span>
+          </div>
+        `);
+      }
+    }
+
+    if (labels.length === 0) {
+      toast({ title: 'No Items', description: 'This invoice has no items to generate labels for.' });
+      return;
+    }
+
+    printLabelViaIframe(labels, widthMm, heightMm);
+    setStatusMessage(`Sent ${labels.length} label(s) [${size}] to POSIFLOW label printer!`);
+    setTimeout(() => setStatusMessage(null), 3500);
   };
 
   const formattedDate = sale.date ? format(new Date(sale.date), 'dd-MMM-yyyy hh:mm a') : '';
@@ -152,11 +187,11 @@ export function ThermalPrintDialog({
           <div className="flex items-center justify-between">
             <DialogTitle className="flex items-center gap-2 text-base font-bold">
               <Printer className="h-5 w-5 text-primary" />
-              Thermal Receipt Print (3" 80mm & 2" 58mm)
+              POSIFLOW 2" (55mm) Thermal Receipt
             </DialogTitle>
           </div>
           <DialogDescription className="text-xs">
-            Direct 1-Click thermal printing for Windows POS printers & continuous roll preview.
+            Direct 55mm thermal printing for POSIFLOW 2-inch printer — calibrated to prevent text truncation.
           </DialogDescription>
         </DialogHeader>
 
@@ -172,47 +207,76 @@ export function ThermalPrintDialog({
         <div className="flex flex-col gap-2 py-2 border-b no-print">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-muted-foreground">Roll Size:</span>
-              <div className="flex gap-1.5">
-                <Button
-                  type="button"
-                  variant={paperWidth === '80mm' ? 'default' : 'outline'}
-                  size="sm"
-                  className="h-8 text-xs font-medium"
-                  onClick={() => handleSetPaperWidth('80mm')}
-                >
-                  {paperWidth === '80mm' && <Check className="h-3.5 w-3.5 mr-1" />}
-                  80mm (3 Inch Standard)
-                </Button>
-                <Button
-                  type="button"
-                  variant={paperWidth === '58mm' ? 'default' : 'outline'}
-                  size="sm"
-                  className="h-8 text-xs font-medium"
-                  onClick={() => handleSetPaperWidth('58mm')}
-                >
-                  {paperWidth === '58mm' && <Check className="h-3.5 w-3.5 mr-1" />}
-                  58mm (2 Inch Compact)
-                </Button>
+              <span className="text-xs font-semibold text-muted-foreground">Printer Size:</span>
+              <div className="flex items-center gap-1.5">
+                <div className="px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1 shadow-xs">
+                  <Check className="h-3.5 w-3.5 mr-0.5" />
+                  55mm (POSIFLOW 2" Default)
+                </div>
               </div>
             </div>
 
-            {/* Test Print Link */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={isTesting}
-              onClick={handleTestPrint}
-              className="h-8 text-xs text-muted-foreground hover:text-foreground"
-            >
-              {isTesting ? (
-                <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5 mr-1 text-primary" />
-              )}
-              Test Strip
-            </Button>
+            {/* Test Print Link & Label Shortcut */}
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => handlePrintItemLabels(selectedLabelSize)}
+                className="h-8 text-xs font-medium text-primary border-primary/30 hover:bg-primary/5"
+                title="Print 50x30 or 50x25 barcode sticker labels for items in this order"
+              >
+                <Tag className="h-3.5 w-3.5 mr-1" />
+                Labels ({selectedLabelSize})
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={isTesting}
+                onClick={handleTestPrint}
+                className="h-8 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {isTesting ? (
+                  <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5 mr-1 text-primary" />
+                )}
+                Test Strip
+              </Button>
+            </div>
+          </div>
+
+          {/* Quick Label Size Switcher if printing labels for this order */}
+          <div className="flex items-center justify-between text-xs px-2.5 py-1 rounded bg-muted/40 border">
+            <span className="text-muted-foreground font-medium flex items-center gap-1">
+              <Tag className="h-3 w-3" />
+              Direct Label Roll Size:
+            </span>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => setSelectedLabelSize('50x30')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                  selectedLabelSize === '50x30'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                    : 'bg-background hover:bg-muted text-muted-foreground'
+                }`}
+              >
+                50x30mm (Standard)
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedLabelSize('50x25')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                  selectedLabelSize === '50x25'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                    : 'bg-background hover:bg-muted text-muted-foreground'
+                }`}
+              >
+                50x25mm (Compact)
+              </button>
+            </div>
           </div>
 
           {/* USB Direct Thermal Printer Status Bar */}
@@ -228,8 +292,8 @@ export function ThermalPrintDialog({
                 <Usb className="h-4 w-4 shrink-0" />
                 <span className="font-medium">
                   {hasSerialPort
-                    ? 'Direct USB/Serial Printer: Paired & Ready'
-                    : 'Direct USB Thermal Print: Port not selected'}
+                    ? 'POSIFLOW USB Printer: Paired & Ready'
+                    : 'POSIFLOW USB Printer: Port not selected'}
                 </span>
               </div>
               <Button
@@ -250,10 +314,10 @@ export function ThermalPrintDialog({
           <div
             id="thermal-receipt-preview"
             style={{
-              width: paperWidth === '58mm' ? '240px' : '320px',
+              width: '225px',
               fontFamily: "'Courier New', Courier, monospace",
             }}
-            className="bg-white text-black p-4 border border-black shadow-sm text-xs leading-snug select-none rounded-none"
+            className="bg-white text-black p-3 border border-black shadow-sm text-xs leading-snug select-none rounded-none"
           >
             {/* Receipt Header */}
             <div className="text-center space-y-0.5 mb-2">

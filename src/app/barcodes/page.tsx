@@ -35,6 +35,7 @@ import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, where } from 'firebase/firestore';
 import type { Product, CompanyProfile } from '@/lib/types';
 import { generateBarcodeSVG } from '@/lib/barcode-generator';
+import { printLabelViaIframe } from '@/lib/thermal-printer';
 import { useToast } from '@/hooks/use-toast';
 
 interface LabelSizeConfig {
@@ -50,14 +51,22 @@ interface LabelSizeConfig {
 }
 
 const LABEL_SIZES: LabelSizeConfig[] = [
-  // Thermal Roll Sizes (Continuous label printers e.g. TSC, TVS, Zebra, Xprinter)
+  // Thermal Roll Sizes (Continuous label printers e.g. POSIFLOW 2-inch, TSC, TVS, Zebra)
+  {
+    id: 'roll-50x30',
+    name: '50mm × 30mm (2" × 1.2") — POSIFLOW Standard',
+    category: 'roll',
+    widthMm: 50,
+    heightMm: 30,
+    description: 'Standard 2-inch thermal sticker roll for POSIFLOW printer (retail, barcode, MRP).',
+  },
   {
     id: 'roll-50x25',
-    name: '50mm × 25mm (2" × 1")',
+    name: '50mm × 25mm (2" × 1") — POSIFLOW Compact',
     category: 'roll',
     widthMm: 50,
     heightMm: 25,
-    description: 'Most common standard thermal sticker for retail, spares & hardware.',
+    description: 'Compact 2-inch thermal sticker roll for spare parts, jewelry & hardware.',
   },
   {
     id: 'roll-50x38',
@@ -156,7 +165,7 @@ export default function BarcodeGeneratorPage() {
   const [showSubtitle, setShowSubtitle] = useState<boolean>(true);
 
   // Size & Copies
-  const [selectedSizeId, setSelectedSizeId] = useState<string>('roll-50x25');
+  const [selectedSizeId, setSelectedSizeId] = useState<string>('roll-50x30');
   const [copies, setCopies] = useState<number>(10);
   const [viewMode, setViewMode] = useState<'single' | 'sheet'>('single');
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
@@ -224,9 +233,55 @@ export default function BarcodeGeneratorPage() {
     });
   }, [barcodeValue, showCodeText, selectedSize]);
 
+  // Helper: Build single label HTML for direct roll printing
+  const buildLabelHtmlForRoll = (pName: string, pPrice: string, bSvg: string, sub: string) => {
+    const isSmall = selectedSize.heightMm <= 25;
+    return `
+      ${showCompany && companyName ? `<div style="font-size: 8px; font-weight: 800; text-transform: uppercase; border-bottom: 0.5px solid #ccc; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-bottom: 1px;">${companyName}</div>` : ''}
+      ${showProduct ? `<div style="font-size: ${isSmall ? '9px' : '10px'}; font-weight: 700; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 1px 0;">${pName}</div>` : ''}
+      <div style="width: 100%; display: flex; justify-content: center; align-items: center; max-height: ${isSmall ? '55%' : '65%'}; overflow: hidden; margin: 1px 0;">${bSvg}</div>
+      <div style="font-size: 8px; font-weight: 700; width: 100%; display: flex; justify-content: space-between; border-top: 0.5px solid #eee; padding-top: 1px;">
+        ${showPrice ? `<span>MRP: ₹${pPrice}</span>` : '<span></span>'}
+        ${showSubtitle && sub ? `<span>${sub}</span>` : '<span></span>'}
+      </div>
+    `;
+  };
+
   // Print Handler
   const handlePrint = () => {
-    window.print();
+    if (selectedSize.category === 'roll') {
+      const labels: string[] = [];
+      if (mode === 'batch') {
+        for (const prod of flatBatchList) {
+          const bVal = prod.barcode || `SKU-${prod.id.slice(0, 8).toUpperCase()}`;
+          const bSvg = generateBarcodeSVG(bVal, {
+            height: selectedSize.heightMm <= 25 ? 30 : 42,
+            showText: showCodeText,
+            fontSize: 10,
+            barWidth: 2,
+          });
+          labels.push(buildLabelHtmlForRoll(prod.productName, prod.sellingPrice.toFixed(2), bSvg, customSubtitle));
+        }
+      } else {
+        const count = Math.min(copies, 100);
+        for (let i = 0; i < count; i++) {
+          labels.push(buildLabelHtmlForRoll(productName, parseFloat(sellingPrice || '0').toFixed(2), barcodeSvgString, customSubtitle));
+        }
+      }
+
+      if (labels.length === 0) {
+        toast({ title: 'No Labels', description: 'Please add items or set copies to print.' });
+        return;
+      }
+
+      printLabelViaIframe(labels, selectedSize.widthMm, selectedSize.heightMm);
+      toast({
+        title: 'POSIFLOW Direct Roll Print',
+        description: `Sent ${labels.length} label(s) [${selectedSize.widthMm}mm × ${selectedSize.heightMm}mm] to printer.`,
+      });
+    } else {
+      window.print();
+    }
   };
 
   // Download SVG file

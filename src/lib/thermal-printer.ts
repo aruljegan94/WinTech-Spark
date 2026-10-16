@@ -57,54 +57,54 @@ export async function disconnectSerialPort(): Promise<void> {
   }
 }
 
-// ── Dynamic Height Calculation for 80mm / 58mm System Print ──────────────────
-export function calculateReceiptHeightMm(sale: Sale, is3Inch: boolean): number {
+// ── Dynamic Height Calculation for POSIFLOW 55mm / 2-inch System Print ─────
+export function calculateReceiptHeightMm(sale: Sale, is3Inch: boolean = false): number {
   // Base header, tax invoice title, invoice meta, divider lines, and footer
-  let heightMm = 55;
+  let heightMm = 50;
 
-  if (sale.customerName) heightMm += 4.5;
-  if (sale.customerMobile) heightMm += 4.5;
+  if (sale.customerName) heightMm += 4.0;
+  if (sale.customerMobile) heightMm += 4.0;
 
   // Items table header + divider
-  heightMm += 9;
+  heightMm += 8;
 
   // Items
   const items = sale.items || [];
   for (const item of items) {
     const name = item.productName || '';
-    const maxChars = is3Inch ? 26 : 18;
+    const maxChars = is3Inch ? 26 : 14;
     const lines = Math.max(1, Math.ceil(name.length / maxChars));
-    heightMm += lines * 4.5 + 4.5;
+    heightMm += lines * 4.0 + 3.5;
   }
 
   // Totals section (Subtotal, GST, TOTAL box, Payment Mode, Status)
-  heightMm += 32;
+  heightMm += 28;
 
   const discountAmount = Number(sale.discount) || 0;
   if (discountAmount > 0) {
-    heightMm += 5; // Discount line
+    heightMm += 4.5; // Discount line
   }
 
   const total = Number(sale.total) || 0;
   const amountPaid = Number(sale.amountPaid) || 0;
   if (amountPaid > 0 && amountPaid < total) {
-    heightMm += 9; // Paid + Balance Due
+    heightMm += 8; // Paid + Balance Due
   }
 
   // Footer text
-  heightMm += 14;
+  heightMm += 12;
 
   // Cutter feed margin
-  heightMm += 18;
+  heightMm += 16;
 
-  return Math.min(1200, Math.max(85, heightMm));
+  return Math.min(1200, Math.max(80, heightMm));
 }
 
 // ── ESC/POS Binary Command Generator ─────────────────────────────────────────
 export function buildEscPosReceipt(
   sale: Sale,
   companyProfile: CompanyProfile,
-  is3Inch: boolean = true
+  is3Inch: boolean = false
 ): Uint8Array {
   const encoder = new TextEncoder();
   const chunks: Uint8Array[] = [];
@@ -121,7 +121,8 @@ export function buildEscPosReceipt(
     chunks.push(encoder.encode(text + '\n'));
   };
 
-  const lineWidth = is3Inch ? 48 : 32;
+  // 55mm POSIFLOW 2-inch safe width: 30 chars avoids right-edge truncation
+  const lineWidth = is3Inch ? 48 : 30;
   const divider = '-'.repeat(lineWidth);
 
   // Pad or truncate string
@@ -197,9 +198,9 @@ export function buildEscPosReceipt(
         padLeft('Amount', 12)
     );
   } else {
-    // 32 chars: Item (14) + Qty (3) + Rate (7) + Amt (8)
+    // 30 chars (POSIFLOW 55mm safe): Item (12) + Qty (3) + Rate (7) + Amt (8) = 30
     addLine(
-      padRight('Item', 14) +
+      padRight('Item', 12) +
         padLeft('Qty', 3) +
         padLeft('Rate', 7) +
         padLeft('Amount', 8)
@@ -234,9 +235,9 @@ export function buildEscPosReceipt(
         );
       }
     } else {
-      if (name.length <= 14) {
+      if (name.length <= 12) {
         addLine(
-          padRight(name, 14) +
+          padRight(name, 12) +
             padLeft(qty, 3) +
             padLeft(price, 7) +
             padLeft(total, 8)
@@ -244,7 +245,7 @@ export function buildEscPosReceipt(
       } else {
         addLine(name);
         addLine(
-          padRight('', 14) +
+          padRight('', 12) +
             padLeft(qty, 3) +
             padLeft(price, 7) +
             padLeft(total, 8)
@@ -312,13 +313,13 @@ export function buildEscPosReceipt(
 }
 
 // ── ESC/POS Test Receipt Generator ───────────────────────────────────────────
-export function buildEscPosTestReceipt(is3Inch: boolean = true): Uint8Array {
+export function buildEscPosTestReceipt(is3Inch: boolean = false): Uint8Array {
   const encoder = new TextEncoder();
   const chunks: Uint8Array[] = [];
 
   const add = (...bytes: number[]) => chunks.push(new Uint8Array(bytes));
   const addLine = (text: string = '') => chunks.push(encoder.encode(text + '\n'));
-  const lineWidth = is3Inch ? 48 : 32;
+  const lineWidth = is3Inch ? 48 : 30;
   const divider = '-'.repeat(lineWidth);
 
   // Init
@@ -333,7 +334,7 @@ export function buildEscPosTestReceipt(is3Inch: boolean = true): Uint8Array {
   add(0x1b, 0x45, 0x00);
 
   addLine('THERMAL PRINTER TEST');
-  addLine(is3Inch ? '80mm (3-Inch) Thermal Roll' : '58mm (2-Inch) Thermal Roll');
+  addLine(is3Inch ? '80mm (3-Inch) Thermal Roll' : '55mm POSIFLOW (2-Inch)');
   addLine(divider);
 
   add(0x1b, 0x61, 0x00);
@@ -369,7 +370,7 @@ export function buildEscPosTestReceipt(is3Inch: boolean = true): Uint8Array {
 export async function directPrintViaWebSerial(
   sale: Sale,
   companyProfile: CompanyProfile,
-  is3Inch: boolean = true
+  is3Inch: boolean = false
 ): Promise<boolean> {
   let port = await getConnectedSerialPort();
   if (!port) {
@@ -405,7 +406,7 @@ export async function directPrintViaWebSerial(
 }
 
 // ── Direct Test Print via Web Serial ─────────────────────────────────────────
-export async function directTestPrintViaWebSerial(is3Inch: boolean = true): Promise<boolean> {
+export async function directTestPrintViaWebSerial(is3Inch: boolean = false): Promise<boolean> {
   let port = await getConnectedSerialPort();
   if (!port) {
     port = await requestSerialPort();
@@ -437,13 +438,13 @@ export async function directTestPrintViaWebSerial(is3Inch: boolean = true): Prom
   }
 }
 
-// ── Isolated Iframe System Print (Exact 80mm / 58mm Roll, Never A4) ──────────
+// ── Isolated Iframe System Print (Exact 55mm POSIFLOW Roll, Truncation-Free) ──
 export function printReceiptViaIframe(
   sale: Sale,
   companyProfile: CompanyProfile,
-  is3Inch: boolean = true
+  is3Inch: boolean = false
 ): void {
-  const rollWidth = is3Inch ? '80mm' : '58mm';
+  const rollWidth = is3Inch ? '80mm' : '55mm';
   const heightMm = calculateReceiptHeightMm(sale, is3Inch);
   const formattedDate = sale.date
     ? format(new Date(sale.date), 'dd-MMM-yyyy hh:mm a')
@@ -474,14 +475,17 @@ export function printReceiptViaIframe(
       background: #fff;
       color: #000;
       font-family: 'Courier New', Courier, monospace;
-      font-size: ${is3Inch ? '11px' : '9.5px'};
+      font-size: ${is3Inch ? '11px' : '8.5px'};
       line-height: 1.25;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
     .receipt {
       width: ${rollWidth};
-      padding: ${is3Inch ? '4mm 3mm 8mm 3mm' : '3mm 2mm 6mm 2mm'};
+      max-width: ${rollWidth};
+      padding: ${is3Inch ? '4mm 3mm 8mm 3mm' : '2mm 1mm 5mm 1mm'};
+      box-sizing: border-box;
+      overflow: hidden;
     }
     .text-center { text-align: center; }
     .text-right { text-align: right; }
@@ -496,48 +500,49 @@ export function printReceiptViaIframe(
       border-top: 1px solid #000;
       border-bottom: 1px solid #000;
       padding: 2px 0;
-      margin: 4px 0;
+      margin: 3px 0;
       text-align: center;
       font-weight: bold;
     }
     .divider {
       border-top: 1px dashed #000;
-      margin: 3px 0;
+      margin: 2.5px 0;
     }
     .row {
       display: flex;
       justify-content: space-between;
-      margin: 1.5px 0;
+      margin: 1px 0;
+      word-break: break-word;
     }
     .table-header {
       display: flex;
       font-weight: bold;
       border-bottom: 1px solid #000;
       padding-bottom: 2px;
-      margin-bottom: 3px;
+      margin-bottom: 2px;
     }
     .table-row {
       display: flex;
-      margin: 2px 0;
+      margin: 1.5px 0;
     }
-    .col-item { flex: 5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .col-qty { flex: 2; text-align: center; }
-    .col-rate { flex: 2; text-align: right; }
-    .col-amt { flex: 3; text-align: right; font-weight: bold; }
+    .col-item { flex: 4.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .col-qty { flex: 1.5; text-align: center; }
+    .col-rate { flex: 2.5; text-align: right; white-space: nowrap; }
+    .col-amt { flex: 3.5; text-align: right; font-weight: bold; white-space: nowrap; }
     .total-box {
       display: flex;
       justify-content: space-between;
       font-weight: bold;
-      font-size: ${is3Inch ? '12px' : '11px'};
+      font-size: ${is3Inch ? '12px' : '10.5px'};
       border-top: 1px solid #000;
       border-bottom: 1px solid #000;
-      padding: 3px 0;
-      margin: 3px 0;
+      padding: 2.5px 0;
+      margin: 2.5px 0;
     }
     .footer {
       text-align: center;
-      margin-top: 6px;
-      font-size: ${is3Inch ? '10px' : '9px'};
+      margin-top: 4px;
+      font-size: ${is3Inch ? '10px' : '8px'};
     }
   </style>
 </head>
@@ -650,32 +655,32 @@ export function printReceiptViaIframe(
 }
 
 // ── Test Print via Iframe ────────────────────────────────────────────────────
-export function printTestReceiptViaIframe(is3Inch: boolean = true): void {
-  const rollWidth = is3Inch ? '80mm' : '58mm';
+export function printTestReceiptViaIframe(is3Inch: boolean = false): void {
+  const rollWidth = is3Inch ? '80mm' : '55mm';
   const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>Test_Receipt</title>
   <style>
-    @page { size: ${rollWidth} 110mm; margin: 0; }
+    @page { size: ${rollWidth} 100mm; margin: 0; }
     html, body {
       width: ${rollWidth};
       margin: 0;
-      padding: 4mm 3mm;
+      padding: 3mm 1.5mm;
       font-family: 'Courier New', Courier, monospace;
-      font-size: ${is3Inch ? '11px' : '9.5px'};
+      font-size: ${is3Inch ? '11px' : '8.5px'};
       text-align: center;
     }
     .bold { font-weight: bold; }
-    .divider { border-top: 1px dashed #000; margin: 4px 0; }
-    .row { display: flex; justify-content: space-between; margin: 2px 0; }
+    .divider { border-top: 1px dashed #000; margin: 3px 0; }
+    .row { display: flex; justify-content: space-between; margin: 1.5px 0; }
   </style>
 </head>
 <body>
-  <div class="bold" style="font-size: 13px;">WINTECH SPARK</div>
+  <div class="bold" style="font-size: 11px;">WINTECH SPARK</div>
   <div class="bold">THERMAL PRINTER TEST</div>
-  <div>${is3Inch ? '80mm (3-Inch) Thermal Roll' : '58mm (2-Inch) Thermal Roll'}</div>
+  <div>${is3Inch ? '80mm (3-Inch) Thermal Roll' : '55mm POSIFLOW (2-Inch) Roll'}</div>
   <div class="divider"></div>
   <div class="row"><span>Status:</span><span class="bold">Connected & Ready</span></div>
   <div class="row"><span>Date:</span><span>${format(new Date(), 'dd-MMM-yyyy hh:mm a')}</span></div>
@@ -708,5 +713,90 @@ export function printTestReceiptViaIframe(is3Inch: boolean = true): void {
   setTimeout(() => {
     iframe.contentWindow?.focus();
     iframe.contentWindow?.print();
+  }, 350);
+}
+
+// ── Direct Label Roll Print (50x30mm | 50x25mm etc. for POSIFLOW Printers) ──
+export function printLabelViaIframe(
+  labelsHtml: string[],
+  widthMm: number = 50,
+  heightMm: number = 30
+): void {
+  const existingFrame = document.getElementById('label-print-iframe');
+  if (existingFrame) existingFrame.remove();
+
+  const iframe = document.createElement('iframe');
+  iframe.id = 'label-print-iframe';
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  document.body.appendChild(iframe);
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Label_Print_${widthMm}x${heightMm}</title>
+  <style>
+    @page {
+      size: ${widthMm}mm ${heightMm}mm;
+      margin: 0;
+    }
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    html, body {
+      width: ${widthMm}mm;
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      color: #000;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .label-page {
+      width: ${widthMm}mm;
+      height: ${heightMm}mm;
+      max-height: ${heightMm}mm;
+      padding: 1.5mm;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      text-align: center;
+      overflow: hidden;
+      page-break-after: always;
+      break-after: page;
+      box-sizing: border-box;
+    }
+    .label-page:last-child {
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+  </style>
+</head>
+<body>
+  ${labelsHtml.map((h) => `<div class="label-page">${h}</div>`).join('')}
+</body>
+</html>`;
+
+  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+  if (!doc || !iframe.contentWindow) return;
+
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  setTimeout(() => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } catch (e) {
+      console.error('Error triggering label iframe print:', e);
+    }
   }, 350);
 }

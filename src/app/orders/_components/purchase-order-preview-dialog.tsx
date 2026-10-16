@@ -9,9 +9,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Printer, Download, MessageCircle, Building2, Phone, Mail, MapPin, Calendar, Clock, CheckCircle } from 'lucide-react';
+import { Printer, Download, MessageCircle, Building2, Phone, Mail, MapPin, Calendar, Clock, CheckCircle, Tag } from 'lucide-react';
 import { format } from 'date-fns';
 import type { PurchaseOrder, CompanyProfile } from '@/lib/types';
+import { printLabelViaIframe } from '@/lib/thermal-printer';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
@@ -45,6 +46,52 @@ export function PurchaseOrderPreviewDialog({
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handlePrintOrderLabels = (size: '50x30' | '50x25' = '50x30') => {
+    if (!order) return;
+    const widthMm = 50;
+    const heightMm = size === '50x30' ? 30 : 25;
+    const labels: string[] = [];
+    const poNum = order.orderNumber || order.id.slice(0, 8);
+
+    // 1. Order Master Label
+    labels.push(`
+      <div style="font-size: 8px; font-weight: 800; text-transform: uppercase; border-bottom: 0.5px solid #ccc; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-bottom: 1px;">
+        ${companyName}
+      </div>
+      <div style="font-size: 10px; font-weight: 800; margin: 1px 0;">
+        ORDER #${poNum}
+      </div>
+      <div style="font-family: monospace; font-size: 10px; font-weight: 800; background: #f0f0f0; padding: 2px 4px; border-radius: 2px;">
+        *${poNum}*
+      </div>
+      <div style="font-size: 8px; font-weight: 600; width: 100%; display: flex; justify-content: space-between; border-top: 0.5px solid #eee; padding-top: 1px;">
+        <span>Vendor: ${(order.vendorName || 'Vendor').slice(0, 14)}</span>
+        <span>${order.items?.length || 0} Items</span>
+      </div>
+    `);
+
+    // 2. Individual Line Item Labels
+    for (const item of (order.items || [])) {
+      labels.push(`
+        <div style="font-size: 8px; font-weight: 800; text-transform: uppercase; border-bottom: 0.5px solid #ccc; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-bottom: 1px;">
+          ${companyName}
+        </div>
+        <div style="font-size: 9px; font-weight: 700; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 1px 0;">
+          ${item.productName}
+        </div>
+        <div style="font-family: monospace; font-size: 10px; font-weight: 800; background: #f0f0f0; padding: 2px 4px; border-radius: 2px;">
+          *PO-${poNum}*
+        </div>
+        <div style="font-size: 8px; font-weight: 600; width: 100%; display: flex; justify-content: space-between; border-top: 0.5px solid #eee; padding-top: 1px;">
+          <span>Qty: ${item.quantity} ${item.unit || 'pcs'}</span>
+          <span>₹${Number(item.estimatedPrice || 0).toFixed(0)}</span>
+        </div>
+      `);
+    }
+
+    printLabelViaIframe(labels, widthMm, heightMm);
   };
 
   const handleDownloadPDF = () => {
@@ -142,9 +189,13 @@ export function PurchaseOrderPreviewDialog({
               <Download className="h-3.5 w-3.5" />
               <span>PDF</span>
             </Button>
+            <Button variant="outline" size="sm" className="h-8 gap-1 text-xs text-primary border-primary/30 hover:bg-primary/5" onClick={() => handlePrintOrderLabels('50x30')}>
+              <Tag className="h-3.5 w-3.5" />
+              <span>Labels (50x30)</span>
+            </Button>
             <Button size="sm" className="h-8 gap-1 text-xs" onClick={handlePrint}>
               <Printer className="h-3.5 w-3.5" />
-              <span>Print</span>
+              <span>Print PO</span>
             </Button>
           </div>
         </DialogHeader>
