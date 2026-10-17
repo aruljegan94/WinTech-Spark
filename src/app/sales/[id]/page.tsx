@@ -361,10 +361,10 @@ export default function SaleDetailsPage() {
               variant="outline"
               size="sm"
               onClick={() => setIsPrintOpen(true)}
-              className="gap-1.5 font-medium border-border/80 shadow-sm"
+              className="gap-1.5 font-medium border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10 text-foreground shadow-sm"
             >
               <Receipt className="h-4 w-4 text-amber-600" />
-              55mm POS Receipt
+              POSIFLOW Receipt &amp; Labels
             </Button>
 
             {/* Download PDF */}
@@ -791,7 +791,7 @@ export default function SaleDetailsPage() {
       )}
 
       {/* 3. Thermal Print Dialog */}
-      {sale && companyProfile && (
+      {sale && (
         <ThermalPrintDialog
           isOpen={isPrintOpen}
           onOpenChange={setIsPrintOpen}

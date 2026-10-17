@@ -30,12 +30,14 @@ import {
   Trash2,
   ListChecks,
   AlertTriangle,
+  Zap,
 } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, where } from 'firebase/firestore';
 import type { Product, CompanyProfile } from '@/lib/types';
 import { generateBarcodeSVG } from '@/lib/barcode-generator';
-import { printLabelViaIframe } from '@/lib/thermal-printer';
+import { printLabelViaIframe, type LabelPrintItem } from '@/lib/thermal-printer';
+import { Psf20LabelModal } from './_components/psf20-label-modal';
 import { useToast } from '@/hooks/use-toast';
 
 interface LabelSizeConfig {
@@ -51,14 +53,38 @@ interface LabelSizeConfig {
 }
 
 const LABEL_SIZES: LabelSizeConfig[] = [
-  // Thermal Roll Sizes (Continuous label printers e.g. POSIFLOW 2-inch, TSC, TVS, Zebra)
+  // Thermal Roll Sizes (POSIFLOW PSF-20 / SR20, TSC, TVS, Zebra)
   {
     id: 'roll-50x30',
-    name: '50mm × 30mm (2" × 1.2") — POSIFLOW Standard',
+    name: '50mm × 30mm (2" × 1.2") — POSIFLOW PSF-20 Standard',
     category: 'roll',
     widthMm: 50,
     heightMm: 30,
-    description: 'Standard 2-inch thermal sticker roll for POSIFLOW printer (retail, barcode, MRP).',
+    description: 'Native default sticker size for POSIFLOW PSF-20 (SR20) printer (retail, barcode, MRP).',
+  },
+  {
+    id: 'roll-55x30',
+    name: '55mm × 30mm (2.1" × 1.2") — POSIFLOW 55×30 Roll',
+    category: 'roll',
+    widthMm: 55,
+    heightMm: 30,
+    description: '2-inch 55×30mm thermal sticker roll — auto-calibrated to SR20 49mm printhead.',
+  },
+  {
+    id: 'roll-58x30',
+    name: '58mm × 30mm (2.25" × 1.2") — POSIFLOW 58×30 Roll',
+    category: 'roll',
+    widthMm: 58,
+    heightMm: 30,
+    description: '58×30mm thermal sticker roll — auto-calibrated to SR20 49mm printhead.',
+  },
+  {
+    id: 'roll-80x30',
+    name: '80mm × 30mm (3" × 1.2") — 80×30 Roll (PSF-20 Compatible)',
+    category: 'roll',
+    widthMm: 80,
+    heightMm: 30,
+    description: '80×30mm layout automatically scaled to fit POSIFLOW PSF-20 (SR20) 203-DPI printhead.',
   },
   {
     id: 'roll-50x25',
@@ -69,24 +95,48 @@ const LABEL_SIZES: LabelSizeConfig[] = [
     description: 'Compact 2-inch thermal sticker roll for spare parts, jewelry & hardware.',
   },
   {
-    id: 'roll-50x38',
-    name: '50mm × 38mm (2" × 1.5")',
+    id: 'roll-50x20',
+    name: '50mm × 20mm (2" × 0.8") — POSIFLOW Mini',
     category: 'roll',
     widthMm: 50,
-    heightMm: 38,
-    description: 'Medium thermal label with ample space for company name, MRP, & batch.',
+    heightMm: 20,
+    description: 'Native POSIFLOW 50×20mm mini price/SKU tag.',
+  },
+  {
+    id: 'roll-50x40',
+    name: '50mm × 40mm (2" × 1.6") — POSIFLOW Medium',
+    category: 'roll',
+    widthMm: 50,
+    heightMm: 40,
+    description: 'Native POSIFLOW 50×40mm medium thermal label with extra space.',
+  },
+  {
+    id: 'roll-50x50',
+    name: '50mm × 50mm (2" × 2") — POSIFLOW Large Square',
+    category: 'roll',
+    widthMm: 50,
+    heightMm: 50,
+    description: 'Native POSIFLOW 50×50mm maximum-height thermal sticker.',
   },
   {
     id: 'roll-38x25',
-    name: '38mm × 25mm (1.5" × 1")',
+    name: '38mm × 25mm (1.5" × 1") — Small Spare Part',
     category: 'roll',
     widthMm: 38,
     heightMm: 25,
     description: 'Compact label for small spare parts, jewelry, or electronic accessories.',
   },
   {
+    id: 'roll-38x38',
+    name: '38mm × 38mm (1.5" × 1.5") — Square Tag',
+    category: 'roll',
+    widthMm: 38,
+    heightMm: 38,
+    description: 'Square thermal sticker for box & part tagging.',
+  },
+  {
     id: 'roll-100x50',
-    name: '100mm × 50mm (4" × 2")',
+    name: '100mm × 50mm (4" × 2") — Carton / Shipping',
     category: 'roll',
     widthMm: 100,
     heightMm: 50,
@@ -174,6 +224,7 @@ export default function BarcodeGeneratorPage() {
   const [mode, setMode] = useState<'single' | 'batch'>('single');
   const [batchItems, setBatchItems] = useState<{ product: Product; quantity: number }[]>([]);
   const [batchSearch, setBatchSearch] = useState<string>('');
+  const [isPsf20ModalOpen, setIsPsf20ModalOpen] = useState<boolean>(false);
 
   // Initialize company name from profile
   useEffect(() => {
@@ -233,52 +284,62 @@ export default function BarcodeGeneratorPage() {
     });
   }, [barcodeValue, showCodeText, selectedSize]);
 
-  // Helper: Build single label HTML for direct roll printing
-  const buildLabelHtmlForRoll = (pName: string, pPrice: string, bSvg: string, sub: string) => {
-    const isSmall = selectedSize.heightMm <= 25;
-    return `
-      ${showCompany && companyName ? `<div style="font-size: 8px; font-weight: 800; text-transform: uppercase; border-bottom: 0.5px solid #ccc; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-bottom: 1px;">${companyName}</div>` : ''}
-      ${showProduct ? `<div style="font-size: ${isSmall ? '9px' : '10px'}; font-weight: 700; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 1px 0;">${pName}</div>` : ''}
-      <div style="width: 100%; display: flex; justify-content: center; align-items: center; max-height: ${isSmall ? '55%' : '65%'}; overflow: hidden; margin: 1px 0;">${bSvg}</div>
-      <div style="font-size: 8px; font-weight: 700; width: 100%; display: flex; justify-content: space-between; border-top: 0.5px solid #eee; padding-top: 1px;">
-        ${showPrice ? `<span>MRP: ₹${pPrice}</span>` : '<span></span>'}
-        ${showSubtitle && sub ? `<span>${sub}</span>` : '<span></span>'}
-      </div>
-    `;
-  };
+  // Build LabelPrintItem[] for POSIFLOW PSF-20 Direct Print Modal
+  const psf20LabelItems = useMemo<LabelPrintItem[]>(() => {
+    if (mode === 'batch') {
+      return batchItems.map((bi) => ({
+        companyName,
+        productName: bi.product.productName,
+        barcodeValue: bi.product.barcode || `SKU-${bi.product.id.slice(0, 8).toUpperCase()}`,
+        priceFormatted: bi.product.sellingPrice.toFixed(2),
+        subtitle: customSubtitle,
+        copies: bi.quantity,
+        showCompany,
+        showProduct,
+        showPrice,
+        showBarcodeText: showCodeText,
+        showSubtitle,
+      }));
+    }
+    return [
+      {
+        companyName,
+        productName,
+        barcodeValue,
+        priceFormatted: parseFloat(sellingPrice || '0').toFixed(2),
+        subtitle: customSubtitle,
+        copies: Math.max(1, Math.min(copies, 200)),
+        showCompany,
+        showProduct,
+        showPrice,
+        showBarcodeText: showCodeText,
+        showSubtitle,
+      },
+    ];
+  }, [
+    mode,
+    batchItems,
+    companyName,
+    productName,
+    barcodeValue,
+    sellingPrice,
+    customSubtitle,
+    copies,
+    showCompany,
+    showProduct,
+    showPrice,
+    showCodeText,
+    showSubtitle,
+  ]);
 
   // Print Handler
   const handlePrint = () => {
     if (selectedSize.category === 'roll') {
-      const labels: string[] = [];
-      if (mode === 'batch') {
-        for (const prod of flatBatchList) {
-          const bVal = prod.barcode || `SKU-${prod.id.slice(0, 8).toUpperCase()}`;
-          const bSvg = generateBarcodeSVG(bVal, {
-            height: selectedSize.heightMm <= 25 ? 30 : 42,
-            showText: showCodeText,
-            fontSize: 10,
-            barWidth: 2,
-          });
-          labels.push(buildLabelHtmlForRoll(prod.productName, prod.sellingPrice.toFixed(2), bSvg, customSubtitle));
-        }
-      } else {
-        const count = Math.min(copies, 100);
-        for (let i = 0; i < count; i++) {
-          labels.push(buildLabelHtmlForRoll(productName, parseFloat(sellingPrice || '0').toFixed(2), barcodeSvgString, customSubtitle));
-        }
-      }
-
-      if (labels.length === 0) {
-        toast({ title: 'No Labels', description: 'Please add items or set copies to print.' });
+      if (mode === 'batch' && batchItems.length === 0) {
+        toast({ title: 'No Labels', description: 'Please add items to your batch queue first.' });
         return;
       }
-
-      printLabelViaIframe(labels, selectedSize.widthMm, selectedSize.heightMm);
-      toast({
-        title: 'POSIFLOW Direct Roll Print',
-        description: `Sent ${labels.length} label(s) [${selectedSize.widthMm}mm × ${selectedSize.heightMm}mm] to printer.`,
-      });
+      setIsPsf20ModalOpen(true);
     } else {
       window.print();
     }
@@ -519,12 +580,21 @@ export default function BarcodeGeneratorPage() {
     <>
       <PageHeader
         title="Product Barcode & Label Generator"
-        description="Generate and print standardized scannable barcode price tags in thermal rolls or A4 sticker sheets."
+        description="Generate and print standardized scannable barcode price tags in thermal rolls (POSIFLOW PSF-20) or A4 sticker sheets."
       >
-        <div className="flex gap-2 print:hidden">
+        <div className="flex flex-wrap gap-2 print:hidden">
           <Button variant="outline" size="sm" onClick={handleDownloadSvg} className="gap-1.5 shadow-sm">
             <Download className="h-4 w-4 text-primary" />
             Download SVG
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsPsf20ModalOpen(true)}
+            className="gap-1.5 font-semibold border-primary/40 text-primary hover:bg-primary/5 shadow-sm"
+          >
+            <Zap className="h-4 w-4" />
+            POSIFLOW PSF-20 Config &amp; Print
           </Button>
           <Button size="sm" onClick={handlePrint} className="gap-1.5 font-semibold shadow-sm">
             <Printer className="h-4 w-4" />
@@ -1090,19 +1160,28 @@ export default function BarcodeGeneratorPage() {
           <div className="rounded-xl border bg-muted/30 p-3.5 text-xs text-muted-foreground space-y-1.5 print:hidden">
             <div className="font-semibold text-foreground flex items-center gap-1.5">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Thermal & Sheet Label Tips:
+              POSIFLOW PSF-20 (SR20) &amp; Sheet Label Tips:
             </div>
             <ul className="list-disc pl-4 space-y-0.5">
               <li>
-                <strong>For Thermal Printers (TSC, TVS, Zebra):</strong> Select 50mm × 25mm or 50mm × 38mm. Set printer margins to 0 in your print dialog.
+                <strong>For POSIFLOW PSF-20 (SR20 USB001):</strong> Supports 50×30mm, 55×30mm, 58×30mm, 80×30mm, 50×25mm, 50×20mm, 50×40mm, and 50×50mm. Click <strong>Print Labels</strong> to open the Direct 203-DPI Thermal Print Modal.
               </li>
               <li>
-                <strong>For A4 Sticker Sheets:</strong> Choose 24 or 40 labels per sheet. Print scale must be set to 100% (do not fit to printable area) for exact sticker alignment.
+                <strong>For A4 Sticker Sheets:</strong> Choose 24, 40, or 65 labels per sheet. Print scale must be set to 100% for exact sticker alignment.
               </li>
             </ul>
           </div>
         </div>
       </div>
+
+      {/* POSIFLOW PSF-20 Direct Barcode Label Modal */}
+      <Psf20LabelModal
+        isOpen={isPsf20ModalOpen}
+        onOpenChange={setIsPsf20ModalOpen}
+        labelItems={psf20LabelItems}
+        initialWidthMm={selectedSize.widthMm}
+        initialHeightMm={selectedSize.heightMm}
+      />
     </>
   );
 }
