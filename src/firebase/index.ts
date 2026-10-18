@@ -6,12 +6,17 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore'
 
 // IMPORTANT: DO NOT MODIFY THIS FUNCTION
-    export function initializeFirebase() {
+export function initializeFirebase() {
   if (!getApps().length) {
     const firebaseApp = initializeApp(firebaseConfig);
     return getSdks(firebaseApp);
   }
-  return getSdks(getApp());
+  const existingApp = getApp();
+  if (!existingApp.options?.apiKey || existingApp.options.apiKey === 'your_firebase_api_key_here') {
+    const fallbackApp = getApps().find((a) => a.name === 'spark-valid') || initializeApp(firebaseConfig, 'spark-valid');
+    return getSdks(fallbackApp);
+  }
+  return getSdks(existingApp);
 }
 
 

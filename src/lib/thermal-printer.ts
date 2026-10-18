@@ -6,60 +6,126 @@ import { encodeCode128, generateBarcodeSVG } from '@/lib/barcode-generator';
 
 export type PrintDarkness = 'normal' | 'dark' | 'extra-dark';
 
+export type PaperSizeId =
+  | '50x30'
+  | '55x30'
+  | '58x30'
+  | '80x30'
+  | '50x25'
+  | '50x20'
+  | '50x40'
+  | '50x50'
+  | '38x25'
+  | '38x38'
+  | '55mm-roll'
+  | '57mm-roll'
+  | '58mm-roll'
+  | '80mm-roll';
+
 export interface Psf20PaperPreset {
-  id: string;
+  id: PaperSizeId;
   label: string;
   shortLabel: string;
   mode: 'receipt' | 'label' | 'both';
   widthMm: number;
   heightMm: number; // 0 means dynamic continuous roll height
   isContinuousRoll?: boolean;
+  sr20DriverPaperName: string;
   description: string;
   badge?: string;
 }
 
-export const PSF20_PAPER_PRESETS: Psf20PaperPreset[] = [
-  // ── 30mm Height Sizes (50x30, 55x30, 58x30, 80x30) ──
+export const PSF20_PAPER_PRESETS_LIST: Psf20PaperPreset[] = [
+  // ── Continuous Thermal Receipt Rolls (Full-Length Normal Receipts) ──
+  {
+    id: '55mm-roll',
+    label: '55mm Continuous Receipt Roll (Current Loaded Roll)',
+    shortLabel: '55mm Roll',
+    mode: 'receipt',
+    widthMm: 55,
+    heightMm: 0,
+    isContinuousRoll: true,
+    sr20DriverPaperName: 'SR20 Full-Length Roll (49mm Head)',
+    description: 'Full-length continuous thermal receipt for 55mm paper roll on POSIFLOW PSF-20 (SR20) — large, clear, high-contrast text.',
+    badge: 'Current Roll',
+  },
+  {
+    id: '57mm-roll',
+    label: '57mm Continuous Receipt Roll (POSIFLOW 57mm Max)',
+    shortLabel: '57mm Roll',
+    mode: 'receipt',
+    widthMm: 57,
+    heightMm: 0,
+    isContinuousRoll: true,
+    sr20DriverPaperName: 'SR20 Full-Length Roll (49mm Head)',
+    description: 'Full-length continuous thermal receipt for standard 57mm (2.25") POS paper roll.',
+    badge: 'Machine Max',
+  },
+  {
+    id: '58mm-roll',
+    label: '58mm Continuous Receipt Roll (2" Standard POS)',
+    shortLabel: '58mm Roll',
+    mode: 'receipt',
+    widthMm: 58,
+    heightMm: 0,
+    isContinuousRoll: true,
+    sr20DriverPaperName: 'SR20 Full-Length Roll (49mm Head)',
+    description: 'Standard 58mm (2-inch) continuous full-length thermal receipt roll.',
+  },
+  {
+    id: '80mm-roll',
+    label: '80mm Continuous Receipt Roll (3" Standard POS)',
+    shortLabel: '80mm Roll',
+    mode: 'receipt',
+    widthMm: 80,
+    heightMm: 0,
+    isContinuousRoll: true,
+    sr20DriverPaperName: '80mm Full-Length Roll',
+    description: 'Standard 80mm (3-inch) continuous full-length thermal receipt roll for desktop POS printers.',
+  },
+
+  // ── Barcode Sticker Label Sizes (When Sticker Roll is Loaded Separately) ──
   {
     id: '50x30',
-    label: '50 × 30 mm (2" × 1.2") — PSF-20 / SR20 Default',
+    label: '50 × 30 mm (2" × 1.2") — PSF-20 / SR20 Default Sticker',
     shortLabel: '50×30mm',
-    mode: 'both',
+    mode: 'label',
     widthMm: 50,
     heightMm: 30,
-    description: 'Native default size in POSIFLOW SR20 Windows driver (49mm printable × 30mm). Works for both labels & compact bill stickers.',
-    badge: 'SR20 Default',
+    sr20DriverPaperName: '50 x 30 (49×30mm)',
+    description: 'Native default sticker size in POSIFLOW SR20 Windows driver (49mm printable × 30mm).',
+    badge: 'Default Sticker',
   },
   {
     id: '55x30',
-    label: '55 × 30 mm (2.1" × 1.2") — POSIFLOW 2" Roll',
+    label: '55 × 30 mm (2.1" × 1.2") — POSIFLOW 2" Sticker',
     shortLabel: '55×30mm',
-    mode: 'both',
+    mode: 'label',
     widthMm: 55,
     heightMm: 30,
-    description: '55mm × 30mm thermal roll calibrated to SR20 49mm printable head so text never truncates.',
-    badge: 'Calibrated',
+    sr20DriverPaperName: '50 x 30 (49×30mm)',
+    description: '55mm × 30mm thermal sticker calibrated to SR20 49mm printable head.',
   },
   {
     id: '58x30',
-    label: '58 × 30 mm (2.25" × 1.2") — 2" Thermal Roll',
+    label: '58 × 30 mm (2.25" × 1.2") — 2" Thermal Sticker',
     shortLabel: '58×30mm',
-    mode: 'both',
+    mode: 'label',
     widthMm: 58,
     heightMm: 30,
-    description: 'Standard 58mm × 30mm roll auto-fitted to 48–49mm printable width.',
+    sr20DriverPaperName: '50 x 30 (49×30mm)',
+    description: '58mm × 30mm sticker roll auto-fitted to 49mm printable width.',
   },
   {
     id: '80x30',
-    label: '80 × 30 mm (3" × 1.2") — 3" Wide Strip',
+    label: '80 × 30 mm (3" × 1.2") — Wide Sticker',
     shortLabel: '80×30mm',
-    mode: 'both',
+    mode: 'label',
     widthMm: 80,
     heightMm: 30,
-    description: 'Wide 80mm × 30mm thermal strip for 3-inch POS receipt/label printers.',
+    sr20DriverPaperName: '50 x 30 (Auto-scaled)',
+    description: '80mm × 30mm thermal sticker auto-calibrated for POSIFLOW PSF-20 and 3-inch label printers.',
   },
-
-  // ── Other Official PSF-20 / SR20 Label & Sticker Sizes ──
   {
     id: '50x25',
     label: '50 × 25 mm (2" × 1") — PSF-20 Compact Sticker',
@@ -67,6 +133,7 @@ export const PSF20_PAPER_PRESETS: Psf20PaperPreset[] = [
     mode: 'label',
     widthMm: 50,
     heightMm: 25,
+    sr20DriverPaperName: 'Custom 49×25mm',
     description: 'Popular Shreyans / POSIFLOW 50×25mm direct thermal barcode & MRP label.',
     badge: 'Popular Label',
   },
@@ -77,26 +144,28 @@ export const PSF20_PAPER_PRESETS: Psf20PaperPreset[] = [
     mode: 'label',
     widthMm: 50,
     heightMm: 20,
+    sr20DriverPaperName: '50 x 20 (49×20mm)',
     description: 'Native SR20 driver preset (50 × 20 mm) for compact price/SKU tags.',
   },
   {
     id: '50x40',
-    label: '50 × 40 mm (2" × 1.6") — SR20 Medium Roll',
+    label: '50 × 40 mm (2" × 1.6") — SR20 Medium Sticker',
     shortLabel: '50×40mm',
-    mode: 'both',
+    mode: 'label',
     widthMm: 50,
     heightMm: 40,
-    description: 'Native SR20 driver preset (50 × 40 mm) for detailed product labels or mini bills.',
+    sr20DriverPaperName: '50 x 40 (49×40mm)',
+    description: 'Native SR20 driver preset (50 × 40 mm) for detailed product labels.',
   },
   {
     id: '50x50',
-    label: '50 × 50 mm (2" × 2") — SR20 Large Square',
+    label: '50 × 50 mm (2" × 2") — SR20 Large Square Sticker',
     shortLabel: '50×50mm',
-    mode: 'both',
+    mode: 'label',
     widthMm: 50,
     heightMm: 50,
-    description: 'Native SR20 driver preset (50 × 50 mm) ideal for full compact receipts or box labels.',
-    badge: 'Best for Bill',
+    sr20DriverPaperName: '50 x 50 (49×50mm)',
+    description: 'Native SR20 driver preset (50 × 50 mm) for large box/carton labels.',
   },
   {
     id: '38x25',
@@ -105,7 +174,8 @@ export const PSF20_PAPER_PRESETS: Psf20PaperPreset[] = [
     mode: 'label',
     widthMm: 38,
     heightMm: 25,
-    description: 'Small spare-parts barcode sticker roll (featured in PSF-20 small roll guide).',
+    sr20DriverPaperName: 'Custom 38×25mm',
+    description: 'Small spare-parts barcode sticker roll.',
   },
   {
     id: '38x38',
@@ -114,42 +184,23 @@ export const PSF20_PAPER_PRESETS: Psf20PaperPreset[] = [
     mode: 'label',
     widthMm: 38,
     heightMm: 38,
-    description: 'Small square sticker roll (featured in PSF-20 small roll guide).',
-  },
-
-  // ── Continuous Thermal Receipt Rolls ──
-  {
-    id: '55mm-roll',
-    label: '55mm / 50mm Continuous Receipt Roll (PSF-20 2")',
-    shortLabel: '55mm Roll',
-    mode: 'receipt',
-    widthMm: 55,
-    heightMm: 70,
-    isContinuousRoll: true,
-    description: 'Continuous 2-inch receipt paper roll for POSIFLOW PSF-20 (auto-segmented within SR20 75mm limit).',
-    badge: 'Continuous Roll',
-  },
-  {
-    id: '58mm-roll',
-    label: '58mm Continuous Receipt Roll (2" Standard POS)',
-    shortLabel: '58mm Roll',
-    mode: 'receipt',
-    widthMm: 58,
-    heightMm: 0,
-    isContinuousRoll: true,
-    description: 'Standard 58mm (2-inch) continuous thermal receipt roll.',
-  },
-  {
-    id: '80mm-roll',
-    label: '80mm Continuous Receipt Roll (3" Standard POS)',
-    shortLabel: '80mm Roll',
-    mode: 'receipt',
-    widthMm: 80,
-    heightMm: 0,
-    isContinuousRoll: true,
-    description: 'Standard 80mm (3-inch) continuous thermal receipt roll for desktop POS printers.',
+    sr20DriverPaperName: 'Custom 38×38mm',
+    description: 'Small square sticker roll.',
   },
 ];
+
+export const PSF20_PAPER_PRESETS: Record<PaperSizeId, Psf20PaperPreset> =
+  PSF20_PAPER_PRESETS_LIST.reduce((acc, preset) => {
+    acc[preset.id] = preset;
+    return acc;
+  }, {} as Record<PaperSizeId, Psf20PaperPreset>);
+
+export function getPaperPreset(id: PaperSizeId | string): Psf20PaperPreset {
+  return (
+    PSF20_PAPER_PRESETS[id as PaperSizeId] ||
+    PSF20_PAPER_PRESETS['55mm-roll']
+  );
+}
 
 export interface LabelItemData {
   companyName?: string;
@@ -157,19 +208,27 @@ export interface LabelItemData {
   barcodeValue: string;
   priceFormatted: string;
   subtitle?: string;
+  copies?: number;
   showCompany?: boolean;
   showProduct?: boolean;
   showPrice?: boolean;
   showCodeText?: boolean;
+  showBarcodeText?: boolean;
   showSubtitle?: boolean;
 }
 
+export type LabelPrintItem = LabelItemData;
+
 export interface WindowsPrinterStatus {
   name: string;
+  Name: string;
   driverName: string;
+  DriverName: string;
   portName: string;
+  PortName: string;
   status: string;
   isDefault: boolean;
+  IsDefault: boolean;
   isPsf20: boolean;
   paperSizes: {
     name: string;
@@ -178,11 +237,14 @@ export interface WindowsPrinterStatus {
   }[];
 }
 
+export type WindowsPrinterInfo = WindowsPrinterStatus;
+
 export interface PrinterApiStatusResponse {
   supported: boolean;
   platform: string;
   printers: WindowsPrinterStatus[];
   recommendedPrinter: string | null;
+  hasPsf20: boolean;
   error?: string;
 }
 
@@ -199,11 +261,32 @@ export async function fetchWindowsPrinters(): Promise<PrinterApiStatusResponse> 
   try {
     const res = await fetch('/api/printer', { cache: 'no-store' });
     if (!res.ok) {
-      return { supported: false, platform: 'unknown', printers: [], recommendedPrinter: null };
+      return { supported: false, platform: 'unknown', printers: [], recommendedPrinter: null, hasPsf20: false };
     }
-    return await res.json();
+    const raw = await res.json();
+    const printers: WindowsPrinterStatus[] = (raw.printers || []).map((p: any) => ({
+      ...p,
+      name: p.name || p.Name || 'Printer',
+      Name: p.Name || p.name || 'Printer',
+      driverName: p.driverName || p.DriverName || '',
+      DriverName: p.DriverName || p.driverName || '',
+      portName: p.portName || p.PortName || '',
+      PortName: p.PortName || p.portName || '',
+      isDefault: Boolean(p.isDefault ?? p.IsDefault),
+      IsDefault: Boolean(p.IsDefault ?? p.isDefault),
+      isPsf20: Boolean(p.isPsf20),
+    }));
+    const hasPsf20 = Boolean(raw.hasPsf20 ?? printers.some((p) => p.isPsf20 || /SR20|PSF|POSIFLOW/i.test(p.name)));
+    return {
+      supported: Boolean(raw.supported),
+      platform: raw.platform || 'win32',
+      printers,
+      recommendedPrinter: raw.recommendedPrinter || (printers[0]?.name ?? null),
+      hasPsf20,
+      error: raw.error,
+    };
   } catch (_) {
-    return { supported: false, platform: 'unknown', printers: [], recommendedPrinter: null };
+    return { supported: false, platform: 'unknown', printers: [], recommendedPrinter: null, hasPsf20: false };
   }
 }
 
@@ -215,7 +298,14 @@ export async function sendPagesToWindowsPrinter(params: {
   heightMm: number;
   copies?: number;
   jobTitle?: string;
-}): Promise<{ success: boolean; printerName?: string; pagesPrinted?: number; error?: string }> {
+}): Promise<{
+  ok: boolean;
+  success: boolean;
+  printerName: string;
+  paperName: string;
+  pagesPrinted?: number;
+  error?: string;
+}> {
   try {
     const res = await fetch('/api/printer', {
       method: 'POST',
@@ -223,12 +313,31 @@ export async function sendPagesToWindowsPrinter(params: {
       body: JSON.stringify(params),
     });
     const data = await res.json();
-    if (!res.ok || !data.success) {
-      return { success: false, error: data.error || 'Failed to print via Windows Spooler.' };
+    const ok = Boolean(res.ok && (data.success || data.ok));
+    if (!ok) {
+      return {
+        ok: false,
+        success: false,
+        printerName: params.printerName || 'SR20',
+        paperName: `${params.widthMm}x${params.heightMm}mm`,
+        error: data.error || 'Failed to print via Windows Spooler.',
+      };
     }
-    return data;
+    return {
+      ok: true,
+      success: true,
+      printerName: data.printerName || params.printerName || 'SR20',
+      paperName: data.paperName || `${params.widthMm}x${params.heightMm}mm`,
+      pagesPrinted: data.pagesPrinted,
+    };
   } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error calling local printer service.' };
+    return {
+      ok: false,
+      success: false,
+      printerName: params.printerName || 'SR20',
+      paperName: `${params.widthMm}x${params.heightMm}mm`,
+      error: err?.message || 'Network error calling local printer service.',
+    };
   }
 }
 
@@ -321,28 +430,42 @@ export function calculateReceiptHeightMm(sale: Sale, is3Inch: boolean = false): 
  */
 export function renderReceiptToPngPages(
   sale: Sale,
-  companyProfile: CompanyProfile,
-  options: {
-    widthMm: number;
-    heightMm: number;
-    darkness?: PrintDarkness;
-    isSr20?: boolean;
+  companyProfile?: CompanyProfile | null,
+  sizeOrOptions?:
+    | PaperSizeId
+    | string
+    | {
+        widthMm: number;
+        heightMm: number;
+        darkness?: PrintDarkness;
+        isSr20?: boolean;
+      },
+  darknessArg?: PrintDarkness
+): string[] {
+  let widthMm = 55;
+  let darkness: PrintDarkness = darknessArg || 'dark';
+
+  if (typeof sizeOrOptions === 'string') {
+    const preset = getPaperPreset(sizeOrOptions);
+    widthMm = preset.widthMm;
+  } else if (sizeOrOptions && typeof sizeOrOptions === 'object') {
+    widthMm = sizeOrOptions.widthMm;
+    if (sizeOrOptions.darkness) darkness = sizeOrOptions.darkness;
   }
-): { pages: string[]; effectiveWidthMm: number; effectiveHeightMm: number } {
-  const { widthMm, heightMm, darkness = 'dark', isSr20 = true } = options;
 
   // SR20 printhead max printable width is 49mm (392 dots at 203 DPI).
-  // For 50mm, 55mm, 58mm rolls on SR20, we use 49mm effective width so nothing ever clips on the right edge!
+  // For 55mm, 57mm, 58mm continuous rolls on SR20, we use 49mm effective width so text fills the roll edge-to-edge without clipping!
   const effectiveWidthMm = widthMm >= 75 ? 72 : widthMm <= 42 ? widthMm : 49;
-  const isCompactSticker = heightMm > 0 && heightMm <= 42; // e.g. 50x30, 55x30, 58x30, 80x30, 50x40
 
   // 16 pixels per mm (~406 DPI, exact 2x of 203 DPI thermal head) for ultra-crisp text & lines
   const SCALE = 16;
   const canvasW = Math.round(effectiveWidthMm * SCALE);
 
-  const fontWeightBold = darkness === 'extra-dark' ? '900' : '800';
-  const fontWeightNormal = darkness === 'extra-dark' ? '800' : darkness === 'dark' ? '700' : '600';
-  const strokeWidth = darkness === 'extra-dark' ? 3 : 2;
+  // High-contrast thermal weights so 55mm / 57mm receipts print dark and crystal clear
+  const fontWeightExtraBold = '900';
+  const fontWeightBold = darkness === 'normal' ? '700' : '800';
+  const fontWeightNormal = darkness === 'extra-dark' ? '800' : '700';
+  const strokeWidth = darkness === 'extra-dark' ? 3.5 : 2.5;
 
   const compName = (companyProfile?.companyName || 'WIN AUTOMOBILES').toUpperCase();
   const formattedDate = sale.date ? format(new Date(sale.date), 'dd-MMM-yy hh:mm a') : '';
@@ -359,154 +482,19 @@ export function renderReceiptToPngPages(
       : 0;
   const balance = Math.max(0, total - paidAmount - discountAmount);
 
-  // ── Mode A: Compact 30mm / 40mm Height Bill Sticker (e.g., 50x30, 55x30, 58x30, 80x30, 50x40) ──
-  if (isCompactSticker) {
-    const targetH = heightMm;
-    const canvasH = Math.round(targetH * SCALE);
-    const padX = Math.round(1.5 * SCALE);
-    const padY = Math.round(1.2 * SCALE);
-    const innerW = canvasW - padX * 2;
-
-    // How many items fit per 30mm/40mm sticker?
-    const maxItemsPerSticker = targetH <= 32 ? 2 : 4;
-    const itemChunks: typeof items[] = [];
-    if (items.length === 0) {
-      itemChunks.push([]);
-    } else {
-      for (let i = 0; i < items.length; i += maxItemsPerSticker) {
-        itemChunks.push(items.slice(i, i + maxItemsPerSticker));
-      }
-    }
-
-    const pages: string[] = [];
-
-    itemChunks.forEach((chunk, pageIdx) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = canvasW;
-      canvas.height = canvasH;
-      const ctx = canvas.getContext('2d')!;
-
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, canvasW, canvasH);
-      ctx.fillStyle = '#000000';
-      ctx.strokeStyle = '#000000';
-      ctx.textBaseline = 'top';
-
-      let y = padY;
-      const isWide = effectiveWidthMm >= 68;
-      const titleFontPx = Math.round((isWide ? 2.6 : 2.2) * SCALE);
-      const metaFontPx = Math.round((isWide ? 1.85 : 1.65) * SCALE);
-      const itemFontPx = Math.round((isWide ? 1.85 : 1.65) * SCALE);
-      const totalFontPx = Math.round((isWide ? 2.2 : 1.95) * SCALE);
-
-      // 1. Store Header + Invoice # on top line
-      ctx.font = `${fontWeightBold} ${titleFontPx}px "Segoe UI", Arial, sans-serif`;
-      ctx.textAlign = 'left';
-      const headerLeft = compName.slice(0, isWide ? 26 : 16);
-      ctx.fillText(headerLeft, padX, y);
-
-      ctx.font = `${fontWeightBold} ${metaFontPx}px "Courier New", monospace`;
-      ctx.textAlign = 'right';
-      const invBadge = `#${sale.invoiceNumber || 'INV'}${itemChunks.length > 1 ? ` (${pageIdx + 1}/${itemChunks.length})` : ''}`;
-      ctx.fillText(invBadge, canvasW - padX, y + 2);
-      y += titleFontPx + 4;
-
-      // 2. Customer & Date Row
-      ctx.font = `${fontWeightNormal} ${metaFontPx}px "Segoe UI", Arial, sans-serif`;
-      ctx.textAlign = 'left';
-      const custText = (sale.customerName && sale.customerName !== 'N/A' ? sale.customerName : 'Walk-in').slice(0, 16);
-      ctx.fillText(`Cust: ${custText}`, padX, y);
-      ctx.textAlign = 'right';
-      ctx.fillText(sale.date ? format(new Date(sale.date), 'dd/MM/yy HH:mm') : '', canvasW - padX, y);
-      y += metaFontPx + 5;
-
-      // Divider
-      ctx.lineWidth = strokeWidth;
-      ctx.beginPath();
-      ctx.moveTo(padX, y);
-      ctx.lineTo(canvasW - padX, y);
-      ctx.stroke();
-      y += 5;
-
-      // 3. Items Table Header
-      ctx.font = `${fontWeightBold} ${metaFontPx}px "Segoe UI", Arial, sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.fillText('ITEM', padX, y);
-      ctx.textAlign = 'center';
-      ctx.fillText('QTY', padX + Math.round(innerW * 0.56), y);
-      ctx.textAlign = 'right';
-      ctx.fillText('AMT', canvasW - padX, y);
-      y += metaFontPx + 4;
-
-      // 4. Items in this chunk
-      ctx.font = `${fontWeightNormal} ${itemFontPx}px "Segoe UI", Arial, sans-serif`;
-      for (const it of chunk) {
-        const pName = (it.productName || 'Item').slice(0, isWide ? 24 : 15);
-        ctx.textAlign = 'left';
-        ctx.fillText(pName, padX, y);
-        ctx.textAlign = 'center';
-        ctx.fillText(String(it.quantity || 1), padX + Math.round(innerW * 0.56), y);
-        ctx.textAlign = 'right';
-        ctx.font = `${fontWeightBold} ${itemFontPx}px "Courier New", monospace`;
-        ctx.fillText(`Rs.${fmtCurrency(it.total || 0)}`, canvasW - padX, y);
-        ctx.font = `${fontWeightNormal} ${itemFontPx}px "Segoe UI", Arial, sans-serif`;
-        y += itemFontPx + 4;
-      }
-
-      // Bottom Footer Box (pinned near bottom of 30mm/40mm sticker)
-      const bottomY = canvasH - padY - totalFontPx - metaFontPx - 10;
-      const dividerY = Math.max(y + 2, bottomY);
-
-      ctx.lineWidth = strokeWidth;
-      ctx.beginPath();
-      ctx.moveTo(padX, dividerY);
-      ctx.lineTo(canvasW - padX, dividerY);
-      ctx.stroke();
-
-      const totY = dividerY + 5;
-      ctx.font = `${fontWeightBold} ${totalFontPx}px "Segoe UI", Arial, sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.fillText(`TOTAL (${items.length} items):`, padX, totY);
-      ctx.textAlign = 'right';
-      ctx.fillText(`Rs. ${fmtCurrency(total)}`, canvasW - padX, totY);
-
-      const statusY = totY + totalFontPx + 3;
-      ctx.font = `${fontWeightNormal} ${metaFontPx}px "Segoe UI", Arial, sans-serif`;
-      ctx.textAlign = 'left';
-      const gstAndDisc =
-        discountAmount > 0
-          ? `GST: Rs.${fmtCurrency(gstAmount)} | Disc: -${fmtCurrency(discountAmount)}`
-          : `Subtotal: Rs.${fmtCurrency(subtotal)} | GST: Rs.${fmtCurrency(gstAmount)}`;
-      ctx.fillText(gstAndDisc, padX, statusY);
-
-      ctx.font = `${fontWeightBold} ${metaFontPx}px "Segoe UI", Arial, sans-serif`;
-      ctx.textAlign = 'right';
-      ctx.fillText(
-        balance > 0.01 ? `DUE: Rs.${fmtCurrency(balance)}` : `${(sale.paymentStatus || 'PAID').toUpperCase()} (${sale.paymentMode || 'Cash'})`,
-        canvasW - padX,
-        statusY
-      );
-
-      pages.push(canvas.toDataURL('image/png'));
-    });
-
-    return { pages, effectiveWidthMm, effectiveHeightMm: targetH };
-  }
-
-  // ── Mode B: Full Thermal Receipt (50x50, 50mm/55mm/58mm/80mm Roll) ─────────
-  // First draw onto a tall master canvas, then slice into SR20-compatible page segments if needed.
+  // ── Full-Length Continuous Thermal Receipt Layout (55mm / 57mm / 58mm / 80mm Roll) ──
   const isWide = effectiveWidthMm >= 68;
-  const padX = Math.round((isWide ? 2.5 : 1.5) * SCALE);
+  const padX = Math.round((isWide ? 2.0 : 1.0) * SCALE);
   const innerW = canvasW - padX * 2;
 
-  const titleFontPx = Math.round((isWide ? 3.2 : 2.6) * SCALE);
-  const subHeaderFontPx = Math.round((isWide ? 2.1 : 1.8) * SCALE);
-  const bodyFontPx = Math.round((isWide ? 2.1 : 1.85) * SCALE);
-  const totalFontPx = Math.round((isWide ? 2.7 : 2.3) * SCALE);
-  const lineGap = Math.round(0.75 * SCALE);
+  const titleFontPx = Math.round((isWide ? 3.1 : 2.55) * SCALE); // ~41px on 55mm roll
+  const subHeaderFontPx = Math.round((isWide ? 2.0 : 1.72) * SCALE); // ~28px
+  const bodyFontPx = Math.round((isWide ? 2.05 : 1.82) * SCALE); // ~29px
+  const totalFontPx = Math.round((isWide ? 2.65 : 2.25) * SCALE); // ~36px
+  const lineGap = Math.round(0.32 * SCALE); // ~5px compact vertical rhythm
 
-  // Estimate max master canvas height
-  const estHeightMm = Math.max(80, calculateReceiptHeightMm(sale, isWide) + 30);
+  // Allocate generous master canvas height and crop to exact used content height at the end
+  const estHeightMm = Math.max(120, calculateReceiptHeightMm(sale, isWide) + 60);
   const masterCanvas = document.createElement('canvas');
   masterCanvas.width = canvasW;
   masterCanvas.height = Math.round(estHeightMm * SCALE);
@@ -518,13 +506,28 @@ export function renderReceiptToPngPages(
   ctx.strokeStyle = '#000000';
   ctx.textBaseline = 'top';
 
-  let y = Math.round(2.0 * SCALE);
+  let y = Math.round(1.2 * SCALE);
 
   const drawCentered = (text: string, fontPx: number, weight: string) => {
     ctx.font = `${weight} ${fontPx}px "Segoe UI", Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillText(text, canvasW / 2, y, innerW);
     y += fontPx + lineGap;
+  };
+
+  const drawWrappedCentered = (text: string, fontPx: number, weight: string, maxCharsPerLine: number) => {
+    const words = text.trim().split(/\s+/);
+    let currentLine = '';
+    for (const word of words) {
+      const candidate = currentLine ? `${currentLine} ${word}` : word;
+      if (candidate.length <= maxCharsPerLine) {
+        currentLine = candidate;
+      } else {
+        if (currentLine) drawCentered(currentLine, fontPx, weight);
+        currentLine = word;
+      }
+    }
+    if (currentLine) drawCentered(currentLine, fontPx, weight);
   };
 
   const drawRow = (left: string, right: string, fontPx: number, leftWeight: string, rightWeight: string) => {
@@ -542,7 +545,7 @@ export function renderReceiptToPngPages(
     y += 3;
     ctx.lineWidth = strokeWidth;
     if (dashed) {
-      ctx.setLineDash([6, 4]);
+      ctx.setLineDash([7, 4]);
     } else {
       ctx.setLineDash([]);
     }
@@ -551,181 +554,135 @@ export function renderReceiptToPngPages(
     ctx.lineTo(canvasW - padX, y);
     ctx.stroke();
     ctx.setLineDash([]);
-    y += 6;
+    y += 5;
   };
 
   // 1. Company Header
-  drawCentered(compName, titleFontPx, fontWeightBold);
+  drawCentered(compName, titleFontPx, fontWeightExtraBold);
   if (companyProfile?.address) {
     const addrLines = companyProfile.address.split(/\r?\n/);
     for (const line of addrLines) {
-      if (line.trim()) drawCentered(line.trim(), subHeaderFontPx, fontWeightNormal);
+      if (line.trim()) {
+        drawWrappedCentered(line.trim(), subHeaderFontPx, fontWeightNormal, isWide ? 42 : 30);
+      }
     }
   }
   if (companyProfile?.contact) {
-    drawCentered(`Ph: ${companyProfile.contact}`, subHeaderFontPx, fontWeightNormal);
+    drawCentered(`Ph: ${companyProfile.contact}`, subHeaderFontPx, fontWeightBold);
   }
   if (companyProfile?.gstNumber) {
-    drawCentered(`GSTIN: ${companyProfile.gstNumber}`, subHeaderFontPx, fontWeightNormal);
+    drawCentered(`GSTIN: ${companyProfile.gstNumber}`, subHeaderFontPx, fontWeightBold);
   }
 
   // 2. TAX INVOICE Banner
   drawDivider(false);
-  drawCentered('TAX INVOICE', bodyFontPx, fontWeightBold);
+  drawCentered('TAX INVOICE', bodyFontPx, fontWeightExtraBold);
   drawDivider(false);
 
   // 3. Invoice Meta
-  drawRow('Invoice #:', sale.invoiceNumber || '', bodyFontPx, fontWeightNormal, fontWeightBold);
-  drawRow('Date:', formattedDate, bodyFontPx, fontWeightNormal, fontWeightNormal);
+  drawRow('Inv No:', `#${sale.invoiceNumber || ''}`, bodyFontPx, fontWeightNormal, fontWeightExtraBold);
+  drawRow('Date:', formattedDate, bodyFontPx, fontWeightNormal, fontWeightBold);
   if (sale.customerName && sale.customerName !== 'N/A') {
-    drawRow('Customer:', sale.customerName.slice(0, 20), bodyFontPx, fontWeightNormal, fontWeightBold);
+    drawRow('Customer:', sale.customerName.slice(0, isWide ? 28 : 20), bodyFontPx, fontWeightNormal, fontWeightExtraBold);
   }
   if (sale.customerMobile) {
-    drawRow('Mobile:', sale.customerMobile, bodyFontPx, fontWeightNormal, fontWeightNormal);
+    drawRow('Mobile:', sale.customerMobile, bodyFontPx, fontWeightNormal, fontWeightBold);
   }
 
   drawDivider(true);
 
   // 4. Items Table Header
-  ctx.font = `${fontWeightBold} ${bodyFontPx}px "Segoe UI", Arial, sans-serif`;
+  ctx.font = `${fontWeightExtraBold} ${bodyFontPx}px "Segoe UI", Arial, sans-serif`;
   ctx.textAlign = 'left';
-  ctx.fillText('Item', padX, y);
+  ctx.fillText('ITEM', padX, y);
   ctx.textAlign = 'center';
-  ctx.fillText('Qty', padX + Math.round(innerW * 0.48), y);
+  ctx.fillText('QTY', padX + Math.round(innerW * 0.44), y);
   ctx.textAlign = 'right';
-  ctx.fillText('Rate', padX + Math.round(innerW * 0.73), y);
-  ctx.fillText('Amt', canvasW - padX, y);
-  y += bodyFontPx + 4;
+  ctx.fillText('RATE', padX + Math.round(innerW * 0.71), y);
+  ctx.fillText('AMT', canvasW - padX, y);
+  y += bodyFontPx + 3;
   drawDivider(false);
 
-  // 5. Items
+  // 5. Items (Full-length vertical list with crystal-clear product names)
   for (const item of items) {
-    const name = item.productName || 'Item';
+    const name = (item.productName || 'Item').trim();
     const qtyStr = String(item.quantity || 1);
     const rateStr = fmtCurrency(item.price || 0);
     const amtStr = fmtCurrency(item.total || 0);
 
-    const maxInlineChars = isWide ? 20 : 12;
+    const maxInlineChars = isWide ? 18 : 11;
     if (name.length <= maxInlineChars) {
-      ctx.font = `${fontWeightNormal} ${bodyFontPx}px "Segoe UI", Arial, sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.fillText(name, padX, y);
-      ctx.textAlign = 'center';
-      ctx.fillText(qtyStr, padX + Math.round(innerW * 0.48), y);
-      ctx.font = `${fontWeightNormal} ${bodyFontPx}px "Courier New", monospace`;
-      ctx.textAlign = 'right';
-      ctx.fillText(rateStr, padX + Math.round(innerW * 0.73), y);
-      ctx.font = `${fontWeightBold} ${bodyFontPx}px "Courier New", monospace`;
-      ctx.fillText(amtStr, canvasW - padX, y);
-      y += bodyFontPx + lineGap;
-    } else {
-      // Line 1: Full product name
       ctx.font = `${fontWeightBold} ${bodyFontPx}px "Segoe UI", Arial, sans-serif`;
       ctx.textAlign = 'left';
-      ctx.fillText(name.slice(0, isWide ? 34 : 24), padX, y);
-      y += bodyFontPx + 2;
-      // Line 2: Qty, Rate, Amount
-      ctx.font = `${fontWeightNormal} ${bodyFontPx}px "Courier New", monospace`;
-      ctx.textAlign = 'center';
-      ctx.fillText(qtyStr, padX + Math.round(innerW * 0.48), y);
-      ctx.textAlign = 'right';
-      ctx.fillText(rateStr, padX + Math.round(innerW * 0.73), y);
+      ctx.fillText(name, padX, y);
       ctx.font = `${fontWeightBold} ${bodyFontPx}px "Courier New", monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(qtyStr, padX + Math.round(innerW * 0.44), y);
+      ctx.textAlign = 'right';
+      ctx.fillText(rateStr, padX + Math.round(innerW * 0.71), y);
+      ctx.font = `${fontWeightExtraBold} ${bodyFontPx}px "Courier New", monospace`;
       ctx.fillText(amtStr, canvasW - padX, y);
-      y += bodyFontPx + lineGap;
+      y += bodyFontPx + lineGap + 2;
+    } else {
+      // Line 1: Full product name (never truncated at 12 chars!)
+      ctx.font = `${fontWeightExtraBold} ${bodyFontPx}px "Segoe UI", Arial, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(name.slice(0, isWide ? 36 : 26), padX, y, innerW);
+      y += bodyFontPx + 1;
+      // Line 2: Qty, Rate, Amount aligned cleanly under columns
+      ctx.font = `${fontWeightBold} ${bodyFontPx}px "Courier New", monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(qtyStr, padX + Math.round(innerW * 0.44), y);
+      ctx.textAlign = 'right';
+      ctx.fillText(rateStr, padX + Math.round(innerW * 0.71), y);
+      ctx.font = `${fontWeightExtraBold} ${bodyFontPx}px "Courier New", monospace`;
+      ctx.fillText(amtStr, canvasW - padX, y);
+      y += bodyFontPx + lineGap + 2;
     }
   }
 
   drawDivider(true);
 
   // 6. Totals
-  drawRow('Subtotal:', `Rs. ${fmtCurrency(subtotal)}`, bodyFontPx, fontWeightNormal, fontWeightNormal);
-  drawRow('GST:', `Rs. ${fmtCurrency(gstAmount)}`, bodyFontPx, fontWeightNormal, fontWeightNormal);
+  drawRow('Subtotal:', `Rs. ${fmtCurrency(subtotal)}`, bodyFontPx, fontWeightNormal, fontWeightBold);
+  drawRow('GST:', `Rs. ${fmtCurrency(gstAmount)}`, bodyFontPx, fontWeightNormal, fontWeightBold);
   if (discountAmount > 0) {
-    drawRow('Discount:', `-Rs. ${fmtCurrency(discountAmount)}`, bodyFontPx, fontWeightNormal, fontWeightBold);
+    drawRow('Discount:', `-Rs. ${fmtCurrency(discountAmount)}`, bodyFontPx, fontWeightNormal, fontWeightExtraBold);
   }
 
   drawDivider(false);
-  drawRow('TOTAL:', `Rs. ${fmtCurrency(total)}`, totalFontPx, fontWeightBold, fontWeightBold);
+  drawRow('TOTAL:', `Rs. ${fmtCurrency(total)}`, totalFontPx, fontWeightExtraBold, fontWeightExtraBold);
   drawDivider(false);
 
-  drawRow('Payment Mode:', sale.paymentMode || 'Cash', bodyFontPx, fontWeightNormal, fontWeightNormal);
-  drawRow('Status:', (sale.paymentStatus || 'Paid').toUpperCase(), bodyFontPx, fontWeightNormal, fontWeightBold);
+  drawRow('Pay Mode:', `${sale.paymentMode || 'Cash'} (${(sale.paymentStatus || 'Paid').toUpperCase()})`, bodyFontPx, fontWeightNormal, fontWeightExtraBold);
 
   if (paidAmount > 0 && balance > 0.01) {
-    drawRow('Amount Paid:', `Rs. ${fmtCurrency(paidAmount)}`, bodyFontPx, fontWeightNormal, fontWeightNormal);
-    drawRow('Balance Due:', `Rs. ${fmtCurrency(balance)}`, bodyFontPx, fontWeightBold, fontWeightBold);
+    drawRow('Paid:', `Rs. ${fmtCurrency(paidAmount)}`, bodyFontPx, fontWeightNormal, fontWeightBold);
+    drawRow('Balance Due:', `Rs. ${fmtCurrency(balance)}`, bodyFontPx, fontWeightExtraBold, fontWeightExtraBold);
   }
 
   drawDivider(true);
 
   // 7. Footer
-  drawCentered('Thank You for Your Business!', subHeaderFontPx, fontWeightBold);
-  drawCentered('Please Visit Again', subHeaderFontPx, fontWeightNormal);
+  drawCentered('Thank You for Your Business!', subHeaderFontPx, fontWeightExtraBold);
+  drawCentered('Please Visit Again', subHeaderFontPx, fontWeightBold);
 
-  y += Math.round(2.5 * SCALE);
+  y += Math.round(1.5 * SCALE);
 
   const actualUsedHeightPx = y;
-  const actualUsedHeightMm = Math.ceil(actualUsedHeightPx / SCALE);
+  const finalMm = Math.max(40, Math.ceil(actualUsedHeightPx / SCALE));
 
-  // If fixed 50x50 preset was selected and content fits or is scaled to 50mm:
-  if (heightMm === 50) {
-    const pageH = 50 * SCALE;
-    if (actualUsedHeightPx <= pageH * 1.35) {
-      // Scale smoothly to fit 1 single 50x50 page if close
-      const pageCanvas = document.createElement('canvas');
-      pageCanvas.width = canvasW;
-      pageCanvas.height = pageH;
-      const pCtx = pageCanvas.getContext('2d')!;
-      pCtx.fillStyle = '#FFFFFF';
-      pCtx.fillRect(0, 0, canvasW, pageH);
-      const ratio = Math.min(1, pageH / actualUsedHeightPx);
-      const drawW = canvasW * ratio;
-      const drawX = (canvasW - drawW) / 2;
-      pCtx.drawImage(masterCanvas, 0, 0, canvasW, actualUsedHeightPx, drawX, 0, drawW, actualUsedHeightPx * ratio);
-      return { pages: [pageCanvas.toDataURL('image/png')], effectiveWidthMm, effectiveHeightMm: 50 };
-    }
-  }
+  // Return 1 single full-length continuous receipt image!
+  // (POST /api/printer automatically configures SR20 PrintTicketXML height and 1:1 vertical band streaming if >74mm)
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = canvasW;
+  outCanvas.height = Math.round(finalMm * SCALE);
+  const oCtx = outCanvas.getContext('2d')!;
+  oCtx.fillStyle = '#FFFFFF';
+  oCtx.fillRect(0, 0, outCanvas.width, outCanvas.height);
+  oCtx.drawImage(masterCanvas, 0, 0, canvasW, actualUsedHeightPx, 0, 0, canvasW, actualUsedHeightPx);
 
-  // For SR20 driver (max page height = 75mm), slice into <=72mm segments if needed, or single page if <=74mm
-  const maxSegmentMm = isSr20 && effectiveWidthMm <= 50 ? 72 : Math.max(actualUsedHeightMm, 80);
-
-  if (actualUsedHeightMm <= maxSegmentMm) {
-    const finalMm = Math.max(30, actualUsedHeightMm);
-    const outCanvas = document.createElement('canvas');
-    outCanvas.width = canvasW;
-    outCanvas.height = Math.round(finalMm * SCALE);
-    const oCtx = outCanvas.getContext('2d')!;
-    oCtx.fillStyle = '#FFFFFF';
-    oCtx.fillRect(0, 0, outCanvas.width, outCanvas.height);
-    oCtx.drawImage(masterCanvas, 0, 0, canvasW, actualUsedHeightPx, 0, 0, canvasW, actualUsedHeightPx);
-    return {
-      pages: [outCanvas.toDataURL('image/png')],
-      effectiveWidthMm,
-      effectiveHeightMm: finalMm,
-    };
-  }
-
-  // Multi-segment slicing for extra-long receipts on SR20
-  const segmentPx = Math.round(maxSegmentMm * SCALE);
-  const pages: string[] = [];
-  for (let offsetY = 0; offsetY < actualUsedHeightPx; offsetY += segmentPx) {
-    const sliceH = Math.min(segmentPx, actualUsedHeightPx - offsetY);
-    const segCanvas = document.createElement('canvas');
-    segCanvas.width = canvasW;
-    segCanvas.height = segmentPx;
-    const sCtx = segCanvas.getContext('2d')!;
-    sCtx.fillStyle = '#FFFFFF';
-    sCtx.fillRect(0, 0, canvasW, segmentPx);
-    sCtx.drawImage(masterCanvas, 0, offsetY, canvasW, sliceH, 0, 0, canvasW, sliceH);
-    pages.push(segCanvas.toDataURL('image/png'));
-  }
-
-  return {
-    pages,
-    effectiveWidthMm,
-    effectiveHeightMm: maxSegmentMm,
-  };
+  return [outCanvas.toDataURL('image/png')];
 }
 
 // ── High-Precision 203-DPI Canvas Barcode Label Renderer ─────────────────────
@@ -735,13 +692,25 @@ export function renderReceiptToPngPages(
  */
 export function renderLabelsToPngPages(
   items: LabelItemData[],
-  options: {
-    widthMm: number;
-    heightMm: number;
-    darkness?: PrintDarkness;
-  }
-): { pages: string[]; effectiveWidthMm: number; effectiveHeightMm: number } {
-  const { widthMm, heightMm, darkness = 'dark' } = options;
+  widthMmOrOptions:
+    | number
+    | {
+        widthMm: number;
+        heightMm: number;
+        darkness?: PrintDarkness;
+      },
+  heightMmArg?: number,
+  darknessArg?: PrintDarkness
+): string[] {
+  const widthMm =
+    typeof widthMmOrOptions === 'number' ? widthMmOrOptions : widthMmOrOptions.widthMm;
+  const heightMm =
+    typeof widthMmOrOptions === 'number' ? heightMmArg || 30 : widthMmOrOptions.heightMm;
+  const darkness: PrintDarkness =
+    typeof widthMmOrOptions === 'number'
+      ? darknessArg || 'dark'
+      : widthMmOrOptions.darkness || 'dark';
+
   const effectiveWidthMm = widthMm >= 75 ? 72 : widthMm <= 42 ? widthMm : 49;
   const effectiveHeightMm = Math.max(15, Math.min(75, heightMm));
 
@@ -757,6 +726,8 @@ export function renderLabelsToPngPages(
   const isMiniH = effectiveHeightMm <= 20;
 
   for (const item of items) {
+    const copiesCount = Math.max(1, Math.min(200, Number(item.copies) || 1));
+
     const canvas = document.createElement('canvas');
     canvas.width = canvasW;
     canvas.height = canvasH;
@@ -802,14 +773,16 @@ export function renderLabelsToPngPages(
     }
 
     // 3. Reserve Bottom Row for Price & Subtitle
-    const hasBottomRow = (item.showPrice !== false && item.priceFormatted) || (item.showSubtitle !== false && item.subtitle);
+    const hasBottomRow =
+      (item.showPrice !== false && item.priceFormatted) ||
+      (item.showSubtitle !== false && item.subtitle);
     const bottomRowHeight = hasBottomRow ? priceFontPx + 8 : 0;
     const bottomY = canvasH - padY - bottomRowHeight;
 
     // 4. Draw Crisp Code-128 Barcode in the middle zone
     const barcodeText = (item.barcodeValue || 'SKU-001').trim();
     const bits = encodeCode128(barcodeText);
-    const showCodeStr = item.showCodeText !== false;
+    const showCodeStr = item.showCodeText !== false && item.showBarcodeText !== false;
     const codeTextHeight = showCodeStr ? codeFontPx + 4 : 0;
     const availBarHeight = Math.max(Math.round(5 * SCALE), bottomY - topY - codeTextHeight - 6);
 
@@ -843,12 +816,17 @@ export function renderLabelsToPngPages(
       ctx.stroke();
 
       const textY = bottomY + 4;
-      if (item.showPrice !== false && item.priceFormatted && item.showSubtitle !== false && item.subtitle) {
+      if (
+        item.showPrice !== false &&
+        item.priceFormatted &&
+        item.showSubtitle !== false &&
+        item.subtitle
+      ) {
         ctx.font = `${fontWeightBold} ${priceFontPx}px "Segoe UI", Arial, sans-serif`;
         ctx.textAlign = 'left';
         ctx.fillText(`MRP: Rs.${item.priceFormatted}`, padX, textY);
 
-        ctx.font = `${fontWeightNormal} ${ Math.round(priceFontPx * 0.85) }px "Segoe UI", Arial, sans-serif`;
+        ctx.font = `${fontWeightNormal} ${Math.round(priceFontPx * 0.85)}px "Segoe UI", Arial, sans-serif`;
         ctx.textAlign = 'right';
         ctx.fillText(item.subtitle.slice(0, 14), canvasW - padX, textY + 2);
       } else if (item.showPrice !== false && item.priceFormatted) {
@@ -862,20 +840,41 @@ export function renderLabelsToPngPages(
       }
     }
 
-    pages.push(canvas.toDataURL('image/png'));
+    const dataUrl = canvas.toDataURL('image/png');
+    for (let c = 0; c < copiesCount; c++) {
+      pages.push(dataUrl);
+    }
   }
 
-  return { pages, effectiveWidthMm, effectiveHeightMm };
+  return pages;
 }
 
 // ── Render PSF-20 Calibration & Alignment Test Page ──────────────────────────
-export function renderTestPageToDataUrl(options: {
-  widthMm: number;
-  heightMm: number;
-  printerName?: string;
-  darkness?: PrintDarkness;
-}): { page: string; effectiveWidthMm: number; effectiveHeightMm: number } {
-  const { widthMm = 50, heightMm = 30, printerName = 'SR20 (POSIFLOW PSF-20)', darkness = 'dark' } = options;
+export function renderTestPageToDataUrl(
+  widthMmOrOptions:
+    | number
+    | {
+        widthMm: number;
+        heightMm: number;
+        printerName?: string;
+        darkness?: PrintDarkness;
+      },
+  heightMmArg?: number,
+  darknessArg?: PrintDarkness
+): string {
+  const widthMm =
+    typeof widthMmOrOptions === 'number' ? widthMmOrOptions : widthMmOrOptions.widthMm;
+  const heightMm =
+    typeof widthMmOrOptions === 'number' ? heightMmArg || 30 : widthMmOrOptions.heightMm;
+  const darkness: PrintDarkness =
+    typeof widthMmOrOptions === 'number'
+      ? darknessArg || 'dark'
+      : widthMmOrOptions.darkness || 'dark';
+  const printerName =
+    typeof widthMmOrOptions === 'object' && widthMmOrOptions.printerName
+      ? widthMmOrOptions.printerName
+      : 'SR20 (POSIFLOW PSF-20)';
+
   const effectiveWidthMm = widthMm >= 75 ? 72 : widthMm <= 42 ? widthMm : 49;
   const effectiveHeightMm = Math.max(20, Math.min(75, heightMm || 30));
 
@@ -928,11 +927,7 @@ export function renderTestPageToDataUrl(options: {
   ctx.font = `800 ${subPx}px "Segoe UI", Arial, sans-serif`;
   ctx.fillText(`CALIBRATED • ${format(new Date(), 'dd-MMM HH:mm')}`, canvasW / 2, y);
 
-  return {
-    page: canvas.toDataURL('image/png'),
-    effectiveWidthMm,
-    effectiveHeightMm,
-  };
+  return canvas.toDataURL('image/png');
 }
 
 // ── Browser Iframe Print Engine (Fixed for SR20 Driver & All Sizes) ──────────
@@ -940,6 +935,37 @@ export function renderTestPageToDataUrl(options: {
  * Prints rendered 203-DPI PNG pages via an offscreen browser iframe with exact `@page` CSS
  * clamped to SR20's 49mm max width when <= 58mm so the Windows SR20 driver never rejects it.
  */
+export function cleanupPrintLocksAndIframes(): void {
+  if (typeof document === 'undefined') return;
+  const f1 = document.getElementById('spark-thermal-print-iframe');
+  if (f1) f1.remove();
+  const f2 = document.getElementById('label-print-iframe');
+  if (f2) f2.remove();
+
+  const restoreBody = () => {
+    const hasOpenModal = document.querySelector(
+      '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'
+    );
+    if (!hasOpenModal) {
+      if (document.body.style.pointerEvents === 'none') {
+        document.body.style.pointerEvents = '';
+      }
+      if (document.body.style.overflow === 'hidden') {
+        document.body.style.overflow = '';
+      }
+      document.body.removeAttribute('data-scroll-locked');
+    }
+  };
+  restoreBody();
+  setTimeout(restoreBody, 60);
+  setTimeout(restoreBody, 250);
+  if (typeof window !== 'undefined') {
+    try {
+      window.focus();
+    } catch (_) {}
+  }
+}
+
 export function printRenderedPagesViaIframe(
   pages: string[],
   widthMm: number,
@@ -965,6 +991,7 @@ export function printRenderedPagesViaIframe(
   iframe.style.height = '450px';
   iframe.style.border = '0';
   iframe.style.visibility = 'hidden';
+  iframe.style.pointerEvents = 'none';
   document.body.appendChild(iframe);
 
   const html = `<!DOCTYPE html>
@@ -1015,10 +1042,20 @@ export function printRenderedPagesViaIframe(
 <body>
   ${pages.map((src, idx) => `<div class="print-page"><img src="${src}" alt="Page ${idx + 1}" /></div>`).join('')}
   <script>
+    window.onafterprint = function() {
+      try {
+        if (window.parent) window.parent.focus();
+      } catch(e) {}
+    };
     window.onload = function() {
       setTimeout(function() {
         window.focus();
         window.print();
+        setTimeout(function() {
+          try {
+            if (window.parent) window.parent.focus();
+          } catch(e) {}
+        }, 300);
       }, 150);
     };
   </script>
@@ -1307,7 +1344,7 @@ export function printReceiptViaIframe(
 ): void {
   const widthMm = widthMmOverride ?? (is3Inch ? 80 : 50);
   const heightMm = heightMmOverride ?? (is3Inch ? 0 : 30);
-  const { pages, effectiveWidthMm, effectiveHeightMm } = renderReceiptToPngPages(sale, companyProfile, {
+  const pages = renderReceiptToPngPages(sale, companyProfile, {
     widthMm,
     heightMm,
     darkness,
@@ -1315,8 +1352,8 @@ export function printReceiptViaIframe(
   });
   printRenderedPagesViaIframe(
     pages,
-    effectiveWidthMm,
-    effectiveHeightMm,
+    widthMm,
+    heightMm > 0 ? heightMm : 50,
     `Receipt_${sale.invoiceNumber || 'print'}`
   );
 }
@@ -1328,11 +1365,11 @@ export function printTestReceiptViaIframe(
 ): void {
   const widthMm = widthMmOverride ?? (is3Inch ? 80 : 50);
   const heightMm = heightMmOverride ?? 30;
-  const { page, effectiveWidthMm, effectiveHeightMm } = renderTestPageToDataUrl({
+  const page = renderTestPageToDataUrl({
     widthMm,
     heightMm,
   });
-  printRenderedPagesViaIframe([page], effectiveWidthMm, effectiveHeightMm, 'PSF20_Test_Print');
+  printRenderedPagesViaIframe([page], widthMm, heightMm, 'PSF20_Test_Print');
 }
 
 export function printLabelViaIframe(

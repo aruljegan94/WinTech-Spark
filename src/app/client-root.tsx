@@ -13,6 +13,59 @@ function InnerApp({ children }: { children: React.ReactNode }) {
 
   const isLoginRoute = pathname === "/login";
 
+  // Global safeguard: prevent Radix Dialog / DropdownMenu / Select / Print Iframe from leaving
+  // document.body stuck with `pointer-events: none` or `data-scroll-locked` after closing modals.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const unlockStaleBodyLocks = () => {
+      const hasActiveModal = document.querySelector(
+        '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'
+      );
+      if (!hasActiveModal) {
+        if (document.body.style.pointerEvents === "none") {
+          document.body.style.pointerEvents = "";
+        }
+        if (document.body.style.overflow === "hidden") {
+          document.body.style.overflow = "";
+        }
+        if (document.body.hasAttribute("data-scroll-locked")) {
+          document.body.removeAttribute("data-scroll-locked");
+        }
+      }
+    };
+
+    // Run on route changes
+    unlockStaleBodyLocks();
+
+    // Watch document.body style/attribute mutations
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const observer = new MutationObserver(() => {
+      if (
+        document.body.style.pointerEvents === "none" ||
+        document.body.hasAttribute("data-scroll-locked")
+      ) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(unlockStaleBodyLocks, 60);
+      }
+    });
+
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["style", "data-scroll-locked"],
+    });
+
+    window.addEventListener("afterprint", unlockStaleBodyLocks);
+    window.addEventListener("focus", unlockStaleBodyLocks);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      observer.disconnect();
+      window.removeEventListener("afterprint", unlockStaleBodyLocks);
+      window.removeEventListener("focus", unlockStaleBodyLocks);
+    };
+  }, [pathname]);
+
   useEffect(() => {
     // If auth state resolved and no user logged in, immediately redirect to /login
     if (!isUserLoading && !user && !isLoginRoute) {

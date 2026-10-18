@@ -33,6 +33,7 @@ import {
   fetchWindowsPrinters,
   sendPagesToWindowsPrinter,
   printRenderedPagesViaIframe,
+  cleanupPrintLocksAndIframes,
   type PaperSizeId,
   type PrintDarkness,
   type WindowsPrinterInfo,
@@ -232,8 +233,27 @@ export function Psf20LabelModal({
     [printers, selectedPrinter]
   );
 
+  const handleDialogOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      onOpenChange(nextOpen);
+      if (!nextOpen) {
+        cleanupPrintLocksAndIframes();
+      }
+    },
+    [onOpenChange]
+  );
+
+  useEffect(() => {
+    if (!isOpen) {
+      cleanupPrintLocksAndIframes();
+    }
+    return () => {
+      cleanupPrintLocksAndIframes();
+    };
+  }, [isOpen]);
+
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+    <Dialog open={isOpen} onOpenChange={handleDialogOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[94vh] flex flex-col p-0 overflow-hidden gap-0">
         {/* Header */}
         <DialogHeader className="px-5 pt-4 pb-3 border-b bg-muted/20 no-print">
@@ -508,7 +528,7 @@ export function Psf20LabelModal({
 
         {/* Footer */}
         <DialogFooter className="px-5 py-3 border-t bg-muted/20 flex flex-row items-center justify-between sm:justify-between gap-2 no-print">
-          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" size="sm" onClick={() => handleDialogOpenChange(false)}>
             Close
           </Button>
           <div className="flex items-center gap-2">

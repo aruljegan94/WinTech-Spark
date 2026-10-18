@@ -138,7 +138,8 @@ ConvertTo-Json -InputObject @($result) -Depth 4 -Compress
  * POST /api/printer
  * Prints 1 or more rendered 203-DPI bitmap pages directly to the specified Windows printer
  * (e.g., SR20 / POSIFLOW PSF-20 on USB001) using .NET System.Drawing.Printing.PrintDocument
- * with exact paper size matching and zero browser dialogs.
+ * and Set-PrintConfiguration PrintTicketXML so full-length continuous receipts and labels
+ * print at 1:1 scale without clipping to 30mm.
  */
 export async function POST(req: NextRequest) {
   if (process.platform !== 'win32') {
@@ -157,8 +158,8 @@ export async function POST(req: NextRequest) {
     const {
       printerName = 'SR20',
       pages = [],
-      widthMm = 50,
-      heightMm = 30,
+      widthMm = 55,
+      heightMm = 0,
       copies = 1,
       jobTitle = 'WinTech_Spark_Thermal_Print',
     } = body as {
@@ -193,8 +194,8 @@ export async function POST(req: NextRequest) {
       jobConfigPath,
       JSON.stringify({
         printerName,
-        widthMm: Number(widthMm) || 50,
-        heightMm: Number(heightMm) || 30,
+        widthMm: Number(widthMm) || 55,
+        heightMm: Number(heightMm) || 0,
         copies: Math.max(1, Math.min(100, Number(copies) || 1)),
         jobTitle: String(jobTitle || 'WinTech_Spark_Print'),
         imagePaths,
@@ -215,118 +216,192 @@ $reqHeightMm = [double]$cfg.heightMm
 $copies = [int]$cfg.copies
 $imgPaths = @($cfg.imagePaths)
 
-# Expand image paths according to copies if copies > 1
+$probeSettings = New-Object System.Drawing.Printing.PrinterSettings
+if ($targetPrinter) {
+  $probeSettings.PrinterName = $targetPrinter
+}
+if (-not $probeSettings.IsValid) {
+  $wmi = Get-CimInstance -ClassName Win32_Printer | Where-Object { $_.Name -match 'SR20|PSF|POSIFLOW' } | Select-Object -First 1
+  if ($wmi) {
+    $probeSettings.PrinterName = [string]$wmi.Name
+  } else {
+    $defPrinter = New-Object System.Drawing.Printing.PrinterSettings
+    $probeSettings.PrinterName = $defPrinter.PrinterName
+  }
+}
+if (-not $probeSettings.IsValid) {
+  throw "Printer '$targetPrinter' is not installed or not valid on this Windows system."
+}
+
+$actualPrinterName = $probeSettings.PrinterName
+$isSr20Driver = ($actualPrinterName -match 'SR20|PSF|POSIFLOW')
+
+# SR20 printable width is 49.048mm (193 hundredths of an inch).
+# For 50mm, 55mm, 57mm, 58mm rolls on SR20, we use the full 49.048mm printhead width.
+$effectiveWidthMm = if ($isSr20Driver) {
+  if ($reqWidthMm -lt 45) { $reqWidthMm } else { 49.0 }
+} else {
+  $reqWidthMm
+}
+
+# Inspect the first image to calculate true physical height from its aspect ratio if continuous roll (heightMm <= 0 or > 75)
+$slicePaths = @()
+$sliceHeightMm = $reqHeightMm
+
+foreach ($srcPath in $imgPaths) {
+  $srcImg = [System.Drawing.Bitmap]::FromFile($srcPath)
+  try {
+    $imgW = [double]$srcImg.Width
+    $imgH = [double]$srcImg.Height
+    $calcHeightMm = [math]::Round($effectiveWidthMm * ($imgH / $imgW), 1)
+
+    # On SR20, GPD MaxSize height per page is 75.073mm (600 dots @ 203 DPI).
+    # If a continuous receipt is taller than 74mm on SR20, slice it into 74mm vertical bands at 1:1 scale so it never squashes or clips!
+    if ($isSr20Driver -and ($reqHeightMm -le 0 -or $reqHeightMm -gt 74) -and $calcHeightMm -gt 74.5) {
+      $bandMm = 74.0
+      $sliceHeightMm = $bandMm
+      $pxPerMm = $imgW / $effectiveWidthMm
+      $bandPx = [int][math]::Round($bandMm * $pxPerMm)
+      $offsetY = 0
+      $partIdx = 0
+      while ($offsetY -lt $srcImg.Height) {
+        $thisSlicePx = [math]::Min($bandPx, $srcImg.Height - $offsetY)
+        $thisSliceMm = [math]::Max(20.0, [math]::Round($thisSlicePx / $pxPerMm, 1))
+        $bmpHeightPx = [int][math]::Round($bandMm * $pxPerMm)
+
+        $sliceBmp = New-Object System.Drawing.Bitmap($srcImg.Width, $bmpHeightPx)
+        $g = [System.Drawing.Graphics]::FromImage($sliceBmp)
+        try {
+          $g.Clear([System.Drawing.Color]::White)
+          $srcRect = New-Object System.Drawing.Rectangle(0, $offsetY, $srcImg.Width, $thisSlicePx)
+          $destRect = New-Object System.Drawing.Rectangle(0, 0, $srcImg.Width, $thisSlicePx)
+          $g.DrawImage($srcImg, $destRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
+        } finally {
+          $g.Dispose()
+        }
+        $slicePath = "$srcPath.band_$partIdx.png"
+        $sliceBmp.Save($slicePath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $sliceBmp.Dispose()
+        $slicePaths += $slicePath
+        $offsetY += $thisSlicePx
+        $partIdx++
+      }
+    } else {
+      if ($reqHeightMm -le 0 -or $reqHeightMm -gt 74) {
+        $sliceHeightMm = [math]::Max(25.0, [math]::Min(74.0, $calcHeightMm))
+      } else {
+        $sliceHeightMm = [math]::Max(20.0, [math]::Min(74.0, $reqHeightMm))
+      }
+      $slicePaths += $srcPath
+    }
+  } finally {
+    $srcImg.Dispose()
+  }
+}
+
+# Expand according to copies
 $allPages = @()
-foreach ($p in $imgPaths) {
-  for ($c = 0; $c -lt $copies; $c++) {
+for ($c = 0; $c -lt $copies; $c++) {
+  foreach ($p in $slicePaths) {
     $allPages += [string]$p
   }
 }
 
-$doc = New-Object System.Drawing.Printing.PrintDocument
-$doc.DocumentName = [string]$cfg.jobTitle
-
-if ($targetPrinter) {
-  $doc.PrinterSettings.PrinterName = $targetPrinter
-}
-
-# If specified printer is not valid, try SR20 or default printer
-if (-not $doc.PrinterSettings.IsValid) {
-  $wmi = Get-CimInstance -ClassName Win32_Printer | Where-Object { $_.Name -match 'SR20|PSF|POSIFLOW' } | Select-Object -First 1
-  if ($wmi) {
-    $doc.PrinterSettings.PrinterName = [string]$wmi.Name
-  } else {
-    $defPrinter = New-Object System.Drawing.Printing.PrinterSettings
-    $doc.PrinterSettings.PrinterName = $defPrinter.PrinterName
-  }
-}
-
-if (-not $doc.PrinterSettings.IsValid) {
-  throw "Printer '$targetPrinter' is not installed or not valid on this Windows system."
-}
-
-$actualPrinterName = $doc.PrinterSettings.PrinterName
-$isSr20Driver = ($actualPrinterName -match 'SR20|PSF|POSIFLOW')
-
-# Convert requested mm to hundredths of an inch (1 inch = 25.4 mm => mm / 0.254)
-$reqWidthHundredths = [int][math]::Round($reqWidthMm / 0.254)
-$reqHeightHundredths = [int][math]::Round($reqHeightMm / 0.254)
-
-# SR20 GPD driver has MaxSize PAIR(392, 600) at 203 DPI = 193 x 295 hundredths of an inch (49.048mm x 75.073mm)
-# If printing to SR20, clamp the paper size to SR20 hardware bounds so the driver never rejects the job
+# Update SR20 Windows PrintTicketXML so Unidrv sets VisibleClipBounds to the exact receipt/label height (up to 74mm) instead of clipping at 30mm!
+$origPrintTicketXml = $null
+$paperLabelUsed = "$($effectiveWidthMm)x$($sliceHeightMm)mm"
 if ($isSr20Driver) {
-  $driverWidthHundredths = [math]::Min(193, [math]::Max(100, $reqWidthHundredths))
-  $driverHeightHundredths = [math]::Min(295, [math]::Max(60, $reqHeightHundredths))
-} else {
-  $driverWidthHundredths = $reqWidthHundredths
-  $driverHeightHundredths = $reqHeightHundredths
-}
-
-# Check if a native driver PaperSize matches the requested height (e.g. 50 x 20, 50 x 30, 50 x 40, 50 x 50)
-$matchedPaper = $null
-foreach ($psSize in $doc.PrinterSettings.PaperSizes) {
-  $pHeightMm = $psSize.Height * 0.254
-  $pWidthMm = $psSize.Width * 0.254
-  if ([math]::Abs($pHeightMm - $reqHeightMm) -le 1.5 -and ($isSr20Driver -or [math]::Abs($pWidthMm - $reqWidthMm) -le 3.0)) {
-    $matchedPaper = $psSize
-    break
-  }
-}
-
-if ($matchedPaper -ne $null) {
-  $doc.DefaultPageSettings.PaperSize = $matchedPaper
-} else {
-  $customPaper = New-Object System.Drawing.Printing.PaperSize("SparkCustom", $driverWidthHundredths, $driverHeightHundredths)
-  $doc.DefaultPageSettings.PaperSize = $customPaper
-}
-
-$doc.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
-$doc.DefaultPageSettings.Landscape = $false
-$doc.OriginAtMargins = $false
-$doc.PrintController = New-Object System.Drawing.Printing.StandardPrintController
-
-$script:pageIndex = 0
-
-$doc.add_PrintPage({
-  param($sender, $e)
-  $currentPath = $allPages[$script:pageIndex]
-  $img = [System.Drawing.Image]::FromFile($currentPath)
   try {
-    $e.Graphics.PageUnit = [System.Drawing.GraphicsUnit]::Display
-    $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $e.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-    $e.Graphics.Clear([System.Drawing.Color]::White)
+    $pc = Get-PrintConfiguration -PrinterName $actualPrinterName
+    $origPrintTicketXml = $pc.PrintTicketXML
+    $heightMicrons = [int][math]::Round($sliceHeightMm * 1000)
+    if ($heightMicrons -gt 74500) { $heightMicrons = 74500 }
+    if ($heightMicrons -lt 20000) { $heightMicrons = 20000 }
 
-    # Calculate draw width and height in hundredths of an inch
-    $pageW = [float]$e.PageBounds.Width
-    $pageH = [float]$e.PageBounds.Height
-    if ($pageW -le 0) { $pageW = [float]$driverWidthHundredths }
-    if ($pageH -le 0) { $pageH = [float]$driverHeightHundredths }
+    $mediaOptionXml = "<psf:Feature name=\`"psk:PageMediaSize\`"><psf:Option name=\`"psk:CustomMediaSize\`"><psf:ScoredProperty name=\`"psk:MediaSizeWidth\`"><psf:Value xsi:type=\`"xsd:integer\`">49048</psf:Value></psf:ScoredProperty><psf:ScoredProperty name=\`"psk:MediaSizeHeight\`"><psf:Value xsi:type=\`"xsd:integer\`">$heightMicrons</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>"
+    $updatedXml = [regex]::Replace(
+      $origPrintTicketXml,
+      '<psf:Feature name="psk:PageMediaSize">.*?</psf:Feature>',
+      $mediaOptionXml,
+      [System.Text.RegularExpressions.RegexOptions]::Singleline
+    )
+    Set-PrintConfiguration -PrinterName $actualPrinterName -PrintTicketXml $updatedXml
+    $paperLabelUsed = "SR20 49x$([math]::Round($sliceHeightMm))mm Roll"
+  } catch {
+    # Continue if PrintConfiguration is unavailable
+  }
+}
 
-    # If the user selected a narrower label roll (e.g., 38mm) on the 49mm SR20 printhead, center it horizontally
-    $drawW = [math]::Min($pageW, [float]$reqWidthHundredths)
-    $drawH = [math]::Min($pageH, [float]$reqHeightHundredths)
-    $offsetX = [math]::Max(0.0, ($pageW - $drawW) / 2.0)
+try {
+  $doc = New-Object System.Drawing.Printing.PrintDocument
+  $doc.DocumentName = [string]$cfg.jobTitle
+  $doc.PrinterSettings.PrinterName = $actualPrinterName
 
-    $rect = New-Object System.Drawing.RectangleF($offsetX, 0.0, $drawW, $drawH)
-    $e.Graphics.DrawImage($img, $rect)
-  } finally {
-    $img.Dispose()
+  $reqWidthHundredths = [int][math]::Round($effectiveWidthMm / 0.254)
+  $reqHeightHundredths = [int][math]::Round($sliceHeightMm / 0.254)
+
+  if (-not $isSr20Driver) {
+    $customPaper = New-Object System.Drawing.Printing.PaperSize("SparkReceipt", $reqWidthHundredths, $reqHeightHundredths)
+    $doc.DefaultPageSettings.PaperSize = $customPaper
   }
 
-  $script:pageIndex++
-  if ($script:pageIndex -lt $allPages.Count) {
-    $e.HasMorePages = $true
-  } else {
-    $e.HasMorePages = $false
+  $doc.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
+  $doc.DefaultPageSettings.Landscape = $false
+  $doc.OriginAtMargins = $false
+  $doc.PrintController = New-Object System.Drawing.Printing.StandardPrintController
+
+  $script:pageIndex = 0
+
+  $doc.add_PrintPage({
+    param($sender, $e)
+    $currentPath = $allPages[$script:pageIndex]
+    $img = [System.Drawing.Image]::FromFile($currentPath)
+    try {
+      $e.Graphics.PageUnit = [System.Drawing.GraphicsUnit]::Display
+      $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+      $e.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+      $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+      $e.Graphics.Clear([System.Drawing.Color]::White)
+
+      $clipW = [float]$e.Graphics.VisibleClipBounds.Width
+      $clipH = [float]$e.Graphics.VisibleClipBounds.Height
+      if ($clipW -le 0) { $clipW = [float]$reqWidthHundredths }
+      if ($clipH -le 0) { $clipH = [float]$reqHeightHundredths }
+
+      # Draw at exact 1:1 width-to-height aspect ratio so text is never squashed vertically
+      $drawW = [math]::Min($clipW, [float]$reqWidthHundredths)
+      $aspectRatio = [float]$img.Height / [float]$img.Width
+      $drawH = $drawW * $aspectRatio
+      if ($drawH -gt $clipH) {
+        $drawH = $clipH
+      }
+      $offsetX = [math]::Max(0.0, ($clipW - $drawW) / 2.0)
+
+      $rect = New-Object System.Drawing.RectangleF($offsetX, 0.0, $drawW, $drawH)
+      $e.Graphics.DrawImage($img, $rect)
+    } finally {
+      $img.Dispose()
+    }
+
+    $script:pageIndex++
+    if ($script:pageIndex -lt $allPages.Count) {
+      $e.HasMorePages = $true
+    } else {
+      $e.HasMorePages = $false
+    }
+  })
+
+  $doc.Print()
+  $doc.Dispose()
+} finally {
+  if ($origPrintTicketXml -ne $null) {
+    try {
+      Set-PrintConfiguration -PrinterName $actualPrinterName -PrintTicketXml $origPrintTicketXml
+    } catch {}
   }
-})
+}
 
-$doc.Print()
-$doc.Dispose()
-
-Write-Output ("PRINTED_OK:" + $actualPrinterName + ":" + $allPages.Count)
+Write-Output ("PRINTED_OK:" + $actualPrinterName + ":" + $allPages.Count + ":" + $paperLabelUsed)
 `;
 
     await fs.writeFile(psScriptPath, psScriptContent, 'utf-8');
@@ -345,10 +420,13 @@ Write-Output ("PRINTED_OK:" + $actualPrinterName + ":" + $allPages.Count)
     const parts = outStr.split('PRINTED_OK:')[1]?.split(':') || [];
     const usedPrinter = parts[0] || printerName;
     const totalPrinted = Number(parts[1]) || pages.length;
+    const paperName = parts[2] || `${widthMm}mm Roll`;
 
     return NextResponse.json({
+      ok: true,
       success: true,
       printerName: usedPrinter,
+      paperName,
       pagesPrinted: totalPrinted,
       widthMm,
       heightMm,
@@ -357,6 +435,7 @@ Write-Output ("PRINTED_OK:" + $actualPrinterName + ":" + $allPages.Count)
     console.error('Direct Windows Spooler print error:', err);
     return NextResponse.json(
       {
+        ok: false,
         success: false,
         error: err?.message || 'Failed to print via Windows Spooler.',
       },
