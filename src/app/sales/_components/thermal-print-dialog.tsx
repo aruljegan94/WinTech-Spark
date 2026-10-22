@@ -519,6 +519,17 @@ export function ThermalPrintDialog({
             </div>
 
             <div className="flex items-center gap-1.5">
+              {printers.length === 0 && (
+                <a
+                  href="/Spark-Direct-Printer-Setup.bat"
+                  download="Spark-Direct-Printer-Setup.bat"
+                  className="h-6 px-2.5 text-[11px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white inline-flex items-center gap-1 shadow-xs"
+                  title="Download & run once on this PC to enable 1-click Direct USB Printing from the cloud app"
+                >
+                  <Zap className="h-3 w-3" />
+                  Enable Direct Print on This PC (.bat)
+                </a>
+              )}
               <Button
                 type="button"
                 variant="ghost"

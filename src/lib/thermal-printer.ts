@@ -256,41 +256,91 @@ function fmtCurrency(amount: number): string {
   });
 }
 
-// ── Query Installed Windows Printers via /api/printer ────────────────────────
-export async function fetchWindowsPrinters(): Promise<PrinterApiStatusResponse> {
-  try {
-    const res = await fetch('/api/printer', { cache: 'no-store' });
-    if (!res.ok) {
-      return { supported: false, platform: 'unknown', printers: [], recommendedPrinter: null, hasPsf20: false };
-    }
-    const raw = await res.json();
-    const printers: WindowsPrinterStatus[] = (raw.printers || []).map((p: any) => ({
-      ...p,
-      name: p.name || p.Name || 'Printer',
-      Name: p.Name || p.name || 'Printer',
-      driverName: p.driverName || p.DriverName || '',
-      DriverName: p.DriverName || p.driverName || '',
-      portName: p.portName || p.PortName || '',
-      PortName: p.PortName || p.portName || '',
-      isDefault: Boolean(p.isDefault ?? p.IsDefault),
-      IsDefault: Boolean(p.IsDefault ?? p.isDefault),
-      isPsf20: Boolean(p.isPsf20),
-    }));
-    const hasPsf20 = Boolean(raw.hasPsf20 ?? printers.some((p) => p.isPsf20 || /SR20|PSF|POSIFLOW/i.test(p.name)));
-    return {
-      supported: Boolean(raw.supported),
-      platform: raw.platform || 'win32',
-      printers,
-      recommendedPrinter: raw.recommendedPrinter || (printers[0]?.name ?? null),
-      hasPsf20,
-      error: raw.error,
-    };
-  } catch (_) {
-    return { supported: false, platform: 'unknown', printers: [], recommendedPrinter: null, hasPsf20: false };
+const LOCAL_PRINTER_ENDPOINTS = [
+  '/api/printer',
+  'http://127.0.0.1:18181/api/printer',
+  'http://localhost:18181/api/printer',
+  'http://127.0.0.1:9002/api/printer',
+  'http://localhost:9002/api/printer',
+];
+
+function getOrderedPrinterEndpoints(): string[] {
+  if (typeof window === 'undefined') return ['/api/printer'];
+  const host = window.location.hostname;
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+  if (isLocalHost) {
+    return LOCAL_PRINTER_ENDPOINTS;
   }
+  // When opened on https://spark-winauto.vercel.app (cloud), prioritize the local PC's print bridge first!
+  return [
+    'http://127.0.0.1:18181/api/printer',
+    'http://localhost:18181/api/printer',
+    'http://127.0.0.1:9002/api/printer',
+    'http://localhost:9002/api/printer',
+    '/api/printer',
+  ];
 }
 
-// ── Direct Print to Windows Printer Spooler (/api/printer) ───────────────────
+// ── Query Installed Windows Printers via Local Print Bridge or /api/printer ──
+export async function fetchWindowsPrinters(): Promise<PrinterApiStatusResponse> {
+  const endpoints = getOrderedPrinterEndpoints();
+  for (const endpoint of endpoints) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch(endpoint, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!res.ok) continue;
+
+      const raw = await res.json();
+      if (!raw || !raw.supported) continue;
+
+      const printers: WindowsPrinterStatus[] = (raw.printers || []).map((p: any) => ({
+        ...p,
+        name: p.name || p.Name || 'Printer',
+        Name: p.Name || p.name || 'Printer',
+        driverName: p.driverName || p.DriverName || '',
+        DriverName: p.DriverName || p.driverName || '',
+        portName: p.portName || p.PortName || '',
+        PortName: p.PortName || p.portName || '',
+        isDefault: Boolean(p.isDefault ?? p.IsDefault),
+        IsDefault: Boolean(p.IsDefault ?? p.isDefault),
+        isPsf20: Boolean(p.isPsf20),
+      }));
+      const hasPsf20 = Boolean(
+        raw.hasPsf20 ??
+          printers.some(
+            (p) =>
+              p.isPsf20 ||
+              /SR20|PSF|POSIFLOW/i.test(p.name) ||
+              /SR20|PSF|POSIFLOW/i.test(p.driverName)
+          )
+      );
+      return {
+        supported: true,
+        platform: raw.platform || 'win32',
+        printers,
+        recommendedPrinter: raw.recommendedPrinter || (printers[0]?.name ?? null),
+        hasPsf20,
+        error: raw.error,
+      };
+    } catch (_) {
+      // Try next local endpoint
+    }
+  }
+  return {
+    supported: false,
+    platform: 'unknown',
+    printers: [],
+    recommendedPrinter: null,
+    hasPsf20: false,
+  };
+}
+
+// ── Direct Print to Windows Printer Spooler (Local Bridge or /api/printer) ───
 export async function sendPagesToWindowsPrinter(params: {
   printerName?: string;
   pages: string[];
@@ -306,39 +356,42 @@ export async function sendPagesToWindowsPrinter(params: {
   pagesPrinted?: number;
   error?: string;
 }> {
-  try {
-    const res = await fetch('/api/printer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    const data = await res.json();
-    const ok = Boolean(res.ok && (data.success || data.ok));
-    if (!ok) {
-      return {
-        ok: false,
-        success: false,
-        printerName: params.printerName || 'SR20',
-        paperName: `${params.widthMm}x${params.heightMm}mm`,
-        error: data.error || 'Failed to print via Windows Spooler.',
-      };
+  const endpoints = getOrderedPrinterEndpoints();
+  let lastError = 'Local Windows Direct Print Bridge not reachable.';
+
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await res.json();
+      const ok = Boolean(res.ok && (data.success || data.ok));
+      if (ok) {
+        return {
+          ok: true,
+          success: true,
+          printerName: data.printerName || params.printerName || 'SR20',
+          paperName: data.paperName || `${params.widthMm}x${params.heightMm}mm`,
+          pagesPrinted: data.pagesPrinted,
+        };
+      }
+      if (data?.error) {
+        lastError = data.error;
+      }
+    } catch (err: any) {
+      lastError = err?.message || lastError;
     }
-    return {
-      ok: true,
-      success: true,
-      printerName: data.printerName || params.printerName || 'SR20',
-      paperName: data.paperName || `${params.widthMm}x${params.heightMm}mm`,
-      pagesPrinted: data.pagesPrinted,
-    };
-  } catch (err: any) {
-    return {
-      ok: false,
-      success: false,
-      printerName: params.printerName || 'SR20',
-      paperName: `${params.widthMm}x${params.heightMm}mm`,
-      error: err?.message || 'Network error calling local printer service.',
-    };
   }
+
+  return {
+    ok: false,
+    success: false,
+    printerName: params.printerName || 'SR20',
+    paperName: `${params.widthMm}x${params.heightMm}mm`,
+    error: lastError,
+  };
 }
 
 // ── Check if Web Serial API is supported in current browser ──────────────────
@@ -974,21 +1027,15 @@ export function printRenderedPagesViaIframe(
 ): void {
   if (!pages || pages.length === 0) return;
 
-  // Important: On any Windows PC where the SR20 (POSIFLOW PSF-20) driver is installed,
-  // SR20.GPD defines default PaperSize = "50 x 30 (50 mm x 30 mm)" = PAIR(392, 240) dots = 49.048mm x 30.030mm,
-  // and *Command: CmdFF: "" (zero form-feed between pages on continuous rolls).
-  // When printing a full-length receipt via the Windows Browser Print Dialog on another PC,
-  // if we pass a single tall image, Chrome scales the entire tall receipt down into a single 30mm page!
-  // By slicing tall continuous receipt images into seamless 49mm x 30mm (1:1 aspect ratio) vertical bands
-  // and setting @page { size: 49mm 30mm; margin: 0mm !important; }, Chrome matches SR20's default 50x30mm
-  // paper size on EVERY PC out of the box and streams all bands back-to-back at 100% full width!
+  // Use 74mm full roll page height for continuous receipts on SR20 (49mm x 74mm)
+  // so receipts print as 1 single unsplit continuous sheet instead of splitting at 30mm!
   const is3Inch = widthMm >= 75;
   const isContinuousReceipt = heightMm <= 0 || heightMm > 55;
   const cssWidthMm = is3Inch ? 72 : widthMm <= 42 ? widthMm : 49;
   const cssHeightMm = isContinuousReceipt
     ? is3Inch
       ? 200
-      : 30
+      : 74
     : Math.max(20, Math.min(74, heightMm || 30));
 
   const existingFrame = document.getElementById('spark-thermal-print-iframe');
@@ -1031,7 +1078,7 @@ export function printRenderedPagesViaIframe(
     }
     .print-page {
       width: ${cssWidthMm}mm;
-      height: ${cssHeightMm}mm;
+      ${isContinuousReceipt ? 'height: auto;' : `height: ${cssHeightMm}mm;`}
       display: block;
       overflow: hidden;
       page-break-after: always;
@@ -1043,8 +1090,7 @@ export function printRenderedPagesViaIframe(
     }
     .print-page img {
       width: 100%;
-      height: 100%;
-      object-fit: ${isContinuousReceipt ? 'fill' : 'contain'};
+      ${isContinuousReceipt ? 'height: auto;' : 'height: 100%; object-fit: contain;'}
       display: block;
     }
   </style>
@@ -1060,53 +1106,6 @@ export function printRenderedPagesViaIframe(
       } catch(e) {}
     };
     window.onload = function() {
-      try {
-        var isReceipt = ${isContinuousReceipt ? 'true' : 'false'};
-        var pageW = ${cssWidthMm};
-        var pageH = ${cssHeightMm};
-        if (isReceipt) {
-          var root = document.getElementById('pages-root');
-          var imgs = Array.prototype.slice.call(document.querySelectorAll('.source-page-img'));
-          var newHtml = '';
-          for (var i = 0; i < imgs.length; i++) {
-            var img = imgs[i];
-            var natW = img.naturalWidth || 784;
-            var natH = img.naturalHeight || 480;
-            // Exact pixel height corresponding to 1 band of pageH mm at 1:1 width scale
-            var bandPx = Math.round(natW * (pageH / pageW));
-            if (natH > bandPx + 8) {
-              var offsetY = 0;
-              while (offsetY < natH) {
-                var sliceH = Math.min(bandPx, natH - offsetY);
-                var canvas = document.createElement('canvas');
-                canvas.width = natW;
-                canvas.height = bandPx;
-                var ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, natW, bandPx);
-                ctx.drawImage(img, 0, offsetY, natW, sliceH, 0, 0, natW, sliceH);
-                var sliceUrl = canvas.toDataURL('image/png');
-                newHtml += '<div class="print-page"><img src="' + sliceUrl + '" /></div>';
-                offsetY += sliceH;
-              }
-            } else {
-              var padCanvas = document.createElement('canvas');
-              padCanvas.width = natW;
-              padCanvas.height = bandPx;
-              var pCtx = padCanvas.getContext('2d');
-              pCtx.fillStyle = '#FFFFFF';
-              pCtx.fillRect(0, 0, natW, bandPx);
-              pCtx.drawImage(img, 0, 0, natW, Math.min(natH, bandPx), 0, 0, natW, Math.min(natH, bandPx));
-              newHtml += '<div class="print-page"><img src="' + padCanvas.toDataURL('image/png') + '" /></div>';
-            }
-          }
-          if (newHtml && root) {
-            root.innerHTML = newHtml;
-          }
-        }
-      } catch (err) {
-        console.error('Receipt band slicing error:', err);
-      }
       setTimeout(function() {
         window.focus();
         window.print();

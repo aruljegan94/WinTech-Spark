@@ -10,6 +10,20 @@ const execFileAsync = promisify(execFile);
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Private-Network': 'true',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: CORS_HEADERS,
+  });
+}
+
 export interface WindowsPrinterInfo {
   name: string;
   driverName: string;
@@ -113,12 +127,15 @@ ConvertTo-Json -InputObject @($result) -Depth 4 -Compress
       printers[0] ||
       null;
 
-    return NextResponse.json({
-      supported: true,
-      platform: process.platform,
-      printers,
-      recommendedPrinter: recommended?.name || null,
-    });
+    return NextResponse.json(
+      {
+        supported: true,
+        platform: process.platform,
+        printers,
+        recommendedPrinter: recommended?.name || null,
+      },
+      { headers: CORS_HEADERS }
+    );
   } catch (err: any) {
     console.error('Error querying Windows printers:', err);
     return NextResponse.json(
@@ -129,7 +146,7 @@ ConvertTo-Json -InputObject @($result) -Depth 4 -Compress
         recommendedPrinter: null,
         error: err?.message || 'Failed to query Windows printers.',
       },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }
@@ -148,7 +165,7 @@ export async function POST(req: NextRequest) {
         success: false,
         error: 'Direct Windows Spooler printing is only available when running on Windows.',
       },
-      { status: 400 }
+      { status: 400, headers: CORS_HEADERS }
     );
   }
 
@@ -397,11 +414,7 @@ try {
   $doc.Print()
   $doc.Dispose()
 } finally {
-  if ($origPrintTicketXml -ne $null) {
-    try {
-      Set-PrintConfiguration -PrinterName $actualPrinterName -PrintTicketXml $origPrintTicketXml
-    } catch {}
-  }
+  # Keep SR20 in 49x74.5mm full-length roll mode so even Windows/Browser print never splits at 30mm!
 }
 
 Write-Output ("PRINTED_OK:" + $actualPrinterName + ":" + $allPages.Count + ":" + $paperLabelUsed)
@@ -425,15 +438,18 @@ Write-Output ("PRINTED_OK:" + $actualPrinterName + ":" + $allPages.Count + ":" +
     const totalPrinted = Number(parts[1]) || pages.length;
     const paperName = parts[2] || `${widthMm}mm Roll`;
 
-    return NextResponse.json({
-      ok: true,
-      success: true,
-      printerName: usedPrinter,
-      paperName,
-      pagesPrinted: totalPrinted,
-      widthMm,
-      heightMm,
-    });
+    return NextResponse.json(
+      {
+        ok: true,
+        success: true,
+        printerName: usedPrinter,
+        paperName,
+        pagesPrinted: totalPrinted,
+        widthMm,
+        heightMm,
+      },
+      { headers: CORS_HEADERS }
+    );
   } catch (err: any) {
     console.error('Direct Windows Spooler print error:', err);
     return NextResponse.json(
@@ -442,7 +458,7 @@ Write-Output ("PRINTED_OK:" + $actualPrinterName + ":" + $allPages.Count + ":" +
         success: false,
         error: err?.message || 'Failed to print via Windows Spooler.',
       },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   } finally {
     if (tempDir) {
