@@ -974,10 +974,22 @@ export function printRenderedPagesViaIframe(
 ): void {
   if (!pages || pages.length === 0) return;
 
-  // Important: SR20 driver PrintCapabilities has MaxValue=49048 microns (49.048mm) width and 75073 microns (75.073mm) height.
-  // Using 49mm for 50/55/58mm rolls guarantees Chrome/Edge print preview matches SR20 without clipping or failing!
-  const cssWidthMm = widthMm >= 75 ? 80 : widthMm <= 42 ? widthMm : 49;
-  const cssHeightMm = Math.max(20, Math.min(widthMm >= 75 ? 300 : 74, heightMm || 30));
+  // Important: On any Windows PC where the SR20 (POSIFLOW PSF-20) driver is installed,
+  // SR20.GPD defines default PaperSize = "50 x 30 (50 mm x 30 mm)" = PAIR(392, 240) dots = 49.048mm x 30.030mm,
+  // and *Command: CmdFF: "" (zero form-feed between pages on continuous rolls).
+  // When printing a full-length receipt via the Windows Browser Print Dialog on another PC,
+  // if we pass a single tall image, Chrome scales the entire tall receipt down into a single 30mm page!
+  // By slicing tall continuous receipt images into seamless 49mm x 30mm (1:1 aspect ratio) vertical bands
+  // and setting @page { size: 49mm 30mm; margin: 0mm !important; }, Chrome matches SR20's default 50x30mm
+  // paper size on EVERY PC out of the box and streams all bands back-to-back at 100% full width!
+  const is3Inch = widthMm >= 75;
+  const isContinuousReceipt = heightMm <= 0 || heightMm > 55;
+  const cssWidthMm = is3Inch ? 72 : widthMm <= 42 ? widthMm : 49;
+  const cssHeightMm = isContinuousReceipt
+    ? is3Inch
+      ? 200
+      : 30
+    : Math.max(20, Math.min(74, heightMm || 30));
 
   const existingFrame = document.getElementById('spark-thermal-print-iframe');
   if (existingFrame) existingFrame.remove();
@@ -1020,9 +1032,7 @@ export function printRenderedPagesViaIframe(
     .print-page {
       width: ${cssWidthMm}mm;
       height: ${cssHeightMm}mm;
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
+      display: block;
       overflow: hidden;
       page-break-after: always;
       break-after: page;
@@ -1034,13 +1044,15 @@ export function printRenderedPagesViaIframe(
     .print-page img {
       width: 100%;
       height: 100%;
-      object-fit: contain;
+      object-fit: ${isContinuousReceipt ? 'fill' : 'contain'};
       display: block;
     }
   </style>
 </head>
 <body>
-  ${pages.map((src, idx) => `<div class="print-page"><img src="${src}" alt="Page ${idx + 1}" /></div>`).join('')}
+  <div id="pages-root">
+    ${pages.map((src, idx) => `<div class="print-page"><img class="source-page-img" src="${src}" alt="Page ${idx + 1}" /></div>`).join('')}
+  </div>
   <script>
     window.onafterprint = function() {
       try {
@@ -1048,6 +1060,53 @@ export function printRenderedPagesViaIframe(
       } catch(e) {}
     };
     window.onload = function() {
+      try {
+        var isReceipt = ${isContinuousReceipt ? 'true' : 'false'};
+        var pageW = ${cssWidthMm};
+        var pageH = ${cssHeightMm};
+        if (isReceipt) {
+          var root = document.getElementById('pages-root');
+          var imgs = Array.prototype.slice.call(document.querySelectorAll('.source-page-img'));
+          var newHtml = '';
+          for (var i = 0; i < imgs.length; i++) {
+            var img = imgs[i];
+            var natW = img.naturalWidth || 784;
+            var natH = img.naturalHeight || 480;
+            // Exact pixel height corresponding to 1 band of pageH mm at 1:1 width scale
+            var bandPx = Math.round(natW * (pageH / pageW));
+            if (natH > bandPx + 8) {
+              var offsetY = 0;
+              while (offsetY < natH) {
+                var sliceH = Math.min(bandPx, natH - offsetY);
+                var canvas = document.createElement('canvas');
+                canvas.width = natW;
+                canvas.height = bandPx;
+                var ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, natW, bandPx);
+                ctx.drawImage(img, 0, offsetY, natW, sliceH, 0, 0, natW, sliceH);
+                var sliceUrl = canvas.toDataURL('image/png');
+                newHtml += '<div class="print-page"><img src="' + sliceUrl + '" /></div>';
+                offsetY += sliceH;
+              }
+            } else {
+              var padCanvas = document.createElement('canvas');
+              padCanvas.width = natW;
+              padCanvas.height = bandPx;
+              var pCtx = padCanvas.getContext('2d');
+              pCtx.fillStyle = '#FFFFFF';
+              pCtx.fillRect(0, 0, natW, bandPx);
+              pCtx.drawImage(img, 0, 0, natW, Math.min(natH, bandPx), 0, 0, natW, Math.min(natH, bandPx));
+              newHtml += '<div class="print-page"><img src="' + padCanvas.toDataURL('image/png') + '" /></div>';
+            }
+          }
+          if (newHtml && root) {
+            root.innerHTML = newHtml;
+          }
+        }
+      } catch (err) {
+        console.error('Receipt band slicing error:', err);
+      }
       setTimeout(function() {
         window.focus();
         window.print();
@@ -1056,7 +1115,7 @@ export function printRenderedPagesViaIframe(
             if (window.parent) window.parent.focus();
           } catch(e) {}
         }, 300);
-      }, 150);
+      }, 200);
     };
   </script>
 </body>

@@ -216,12 +216,13 @@ $reqHeightMm = [double]$cfg.heightMm
 $copies = [int]$cfg.copies
 $imgPaths = @($cfg.imagePaths)
 
+$allWmiPrinters = @(Get-CimInstance -ClassName Win32_Printer)
 $probeSettings = New-Object System.Drawing.Printing.PrinterSettings
 if ($targetPrinter) {
   $probeSettings.PrinterName = $targetPrinter
 }
 if (-not $probeSettings.IsValid) {
-  $wmi = Get-CimInstance -ClassName Win32_Printer | Where-Object { $_.Name -match 'SR20|PSF|POSIFLOW' } | Select-Object -First 1
+  $wmi = $allWmiPrinters | Where-Object { ($_.Name -match 'SR20|PSF|POSIFLOW|Shreyans|Label|Thermal|POS') -or ($_.DriverName -match 'SR20|PSF|POSIFLOW|Shreyans') } | Select-Object -First 1
   if ($wmi) {
     $probeSettings.PrinterName = [string]$wmi.Name
   } else {
@@ -234,7 +235,9 @@ if (-not $probeSettings.IsValid) {
 }
 
 $actualPrinterName = $probeSettings.PrinterName
-$isSr20Driver = ($actualPrinterName -match 'SR20|PSF|POSIFLOW')
+$matchedWmi = $allWmiPrinters | Where-Object { $_.Name -eq $actualPrinterName } | Select-Object -First 1
+$actualDriverName = if ($matchedWmi) { [string]$matchedWmi.DriverName } else { "" }
+$isSr20Driver = ($actualPrinterName -match 'SR20|PSF|POSIFLOW|Shreyans') -or ($actualDriverName -match 'SR20|PSF|POSIFLOW|Shreyans')
 
 # SR20 printable width is 49.048mm (193 hundredths of an inch).
 # For 50mm, 55mm, 57mm, 58mm rolls on SR20, we use the full 49.048mm printhead width.
