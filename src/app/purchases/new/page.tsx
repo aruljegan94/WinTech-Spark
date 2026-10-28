@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { z } from 'zod';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 import {
   Card,
   CardContent,
@@ -28,10 +29,10 @@ import {
   useCollection,
   useMemoFirebase,
 } from '@/firebase';
-import { collection, doc, runTransaction, getDoc, setDoc } from 'firebase/firestore';
+import { collection, doc, runTransaction, getDoc, setDoc, query, orderBy } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
-import type { Product, Vendor } from '@/lib/types';
+import type { Product, Vendor, Category } from '@/lib/types';
 import {
   Select,
   SelectContent,
@@ -76,11 +77,35 @@ export default function NewPurchasePage() {
   const router = useRouter();
   const [isScannerOpen, setIsScannerOpen] = useState(false);
 
+  // Item Bar inputs (like Invoice page)
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedProductId, setSelectedProductId] = useState<string>('');
+  const [itemQuantity, setItemQuantity] = useState<number | string>(1);
+  const [itemPrice, setItemPrice] = useState<number | string>('');
+
   const productsQuery = useMemoFirebase(
     () => (firestore ? collection(firestore, 'products') : null),
     [firestore]
   );
   const { data: products, isLoading: productsLoading } = useCollection<Product>(productsQuery);
+
+  const categoriesQuery = useMemoFirebase(
+    () => (firestore ? query(collection(firestore, 'categories'), orderBy('name')) : null),
+    [firestore]
+  );
+  const { data: dbCategories } = useCollection<Category>(categoriesQuery);
+
+  // Extract unique categories for the dropdown filter
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    (dbCategories || []).forEach((c) => {
+      if (c.name && c.name.trim()) set.add(c.name.trim());
+    });
+    (products || []).forEach((p) => {
+      if (p.category && p.category.trim()) set.add(p.category.trim());
+    });
+    return ['all', ...Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))];
+  }, [dbCategories, products]);
 
   const vendorsQuery = useMemoFirebase(
     () => (firestore ? collection(firestore, 'vendors') : null),
@@ -109,18 +134,90 @@ export default function NewPurchasePage() {
     name: "items",
   });
 
+  const handleProductSelect = (product: Product | null) => {
+    if (product) {
+      setSelectedProductId(product.id);
+      setItemPrice(product.purchasePrice ?? 0);
+    } else {
+      setSelectedProductId('');
+      setItemPrice('');
+    }
+  };
+
+  const handleAddItem = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
+    if (!selectedProductId) {
+      toast({
+        variant: 'destructive',
+        title: 'Please select a product',
+        description: 'Choose a product from the search combobox before adding.',
+      });
+      return;
+    }
+
+    const product = products?.find((p) => p.id === selectedProductId);
+    if (!product) {
+      toast({ variant: 'destructive', title: 'Product not found' });
+      return;
+    }
+
+    const qty = parseFloat(String(itemQuantity)) || 1;
+    if (qty <= 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Invalid quantity',
+        description: 'Quantity must be greater than 0.',
+      });
+      return;
+    }
+
+    const price = itemPrice !== '' && !isNaN(parseFloat(String(itemPrice)))
+      ? parseFloat(String(itemPrice))
+      : (product.purchasePrice ?? 0);
+
+    const currentItems = form.getValues('items') || [];
+    const existingIndex = currentItems.findIndex((i) => i.productId === selectedProductId);
+
+    if (existingIndex > -1) {
+      const existing = currentItems[existingIndex];
+      const newQty = Math.round((Number(existing.quantity) + qty) * 1000) / 1000;
+      form.setValue(`items.${existingIndex}.quantity`, newQty, { shouldValidate: true });
+      form.setValue(`items.${existingIndex}.purchasePrice`, price, { shouldValidate: true });
+      toast({
+        title: 'Quantity Updated',
+        description: `Updated ${product.productName} quantity to ${newQty}.`,
+      });
+    } else {
+      append({
+        productId: product.id,
+        quantity: qty,
+        purchasePrice: price,
+      });
+      toast({
+        title: 'Item Added',
+        description: `Added ${qty} × ${product.productName} to purchase list.`,
+      });
+    }
+
+    // Reset item form
+    setSelectedProductId('');
+    setItemQuantity(1);
+    setItemPrice('');
+  };
+
   const handleScannedProduct = (product: Product, scanQuantity: number) => {
     const currentItems = form.getValues('items') || [];
     const existingIndex = currentItems.findIndex(i => i.productId === product.id);
 
     if (existingIndex > -1) {
       const existing = currentItems[existingIndex];
-      form.setValue(`items.${existingIndex}.quantity`, existing.quantity + scanQuantity);
+      form.setValue(`items.${existingIndex}.quantity`, existing.quantity + scanQuantity, { shouldValidate: true });
     } else {
       append({
         productId: product.id,
         quantity: scanQuantity,
-        purchasePrice: product.purchasePrice,
+        purchasePrice: product.purchasePrice || 0,
       });
     }
 
@@ -253,41 +350,6 @@ export default function NewPurchasePage() {
     }
   };
 
-  const handleAddItem = () => {
-    if (products && products.length > 0) {
-      append({
-        productId: '',
-        quantity: 1,
-        purchasePrice: 0,
-      });
-    } else {
-      toast({
-        variant: 'destructive',
-        title: 'No Products',
-        description: 'Please add a product before creating a purchase.',
-      });
-    }
-  };
-
-  const handleProductChange = (index: number, productId: string) => {
-    const currentItem = form.getValues(`items.${index}`);
-    if (!productId) {
-      form.setValue(`items.${index}`, {
-        ...currentItem,
-        productId: '',
-        purchasePrice: 0,
-      });
-      return;
-    }
-    const product = products?.find(p => p.id === productId);
-    if (product) {
-      form.setValue(`items.${index}`, {
-        ...currentItem,
-        productId: productId,
-        purchasePrice: product.purchasePrice || 0,
-      });
-    }
-  };
 
   return (
     <>
@@ -403,10 +465,10 @@ export default function NewPurchasePage() {
                 </CardContent>
               </Card>
 
-              {/* Items Table */}
+              {/* Add Purchase Item Card (Matching Invoice Screen) */}
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle>Purchase Items</CardTitle>
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <CardTitle className="text-base font-semibold">Add Purchase Item</CardTitle>
                   <Button
                     type="button"
                     variant="outline"
@@ -418,88 +480,186 @@ export default function NewPurchasePage() {
                   </Button>
                 </CardHeader>
                 <CardContent>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-12 items-end">
+                    {/* Category Filter */}
+                    <div className="sm:col-span-3">
+                      <Label className="text-xs font-medium mb-1.5 block">Category</Label>
+                      <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="All Categories" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat} value={cat}>
+                              {cat === 'all' ? 'All Categories' : cat}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Search & Find Product */}
+                    <div className="sm:col-span-4">
+                      <Label className="text-xs font-medium mb-1.5 block">Search & Find Product</Label>
+                      <ProductSearchCombobox
+                        products={products || []}
+                        value={selectedProductId}
+                        filterCategory={selectedCategory}
+                        disabled={productsLoading}
+                        priceType="purchasePrice"
+                        placeholder="Search by name, part no, barcode..."
+                        onSelect={handleProductSelect}
+                      />
+                    </div>
+
+                    {/* Quantity */}
+                    <div className="sm:col-span-2">
+                      <Label className="text-xs font-medium mb-1.5 block">Quantity</Label>
+                      <Input
+                        type="number"
+                        min="0.001"
+                        step="any"
+                        placeholder="1"
+                        className="font-mono"
+                        value={itemQuantity}
+                        onChange={(e) => setItemQuantity(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Purchase Price */}
+                    <div className="sm:col-span-2">
+                      <Label className="text-xs font-medium mb-1.5 block">Price (₹)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0.00"
+                        className="font-mono"
+                        value={itemPrice}
+                        onChange={(e) => setItemPrice(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Add Button */}
+                    <div className="sm:col-span-1">
+                      <Button
+                        type="button"
+                        onClick={handleAddItem}
+                        className="w-full gap-1.5"
+                      >
+                        <PlusCircle className="h-4 w-4" /> Add
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Purchase Items List Table */}
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <CardTitle className="text-base font-semibold">Purchase Items</CardTitle>
+                  {fields.length > 0 && (
+                    <Badge variant="outline" className="text-xs font-mono font-normal">
+                      {fields.length} {fields.length === 1 ? 'item' : 'items'}
+                    </Badge>
+                  )}
+                </CardHeader>
+                <CardContent className="p-0">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-2/5">Product</TableHead>
-                        <TableHead>Quantity</TableHead>
-                        <TableHead>Price (₹)</TableHead>
-                        <TableHead>Total (₹)</TableHead>
-                        <TableHead><span className="sr-only">Remove</span></TableHead>
+                        <TableHead className="pl-6">Product</TableHead>
+                        <TableHead className="w-[110px]">Qty</TableHead>
+                        <TableHead className="w-[130px] text-right">Price (₹)</TableHead>
+                        <TableHead className="w-[130px] text-right">Total (₹)</TableHead>
+                        <TableHead className="w-[50px] pr-6"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {fields.map((item, index) => (
-                        <TableRow key={item.id}>
-                          <TableCell>
-                            <Controller
-                              control={form.control}
-                              name={`items.${index}.productId`}
-                              render={({ field }) => (
-                                <ProductSearchCombobox
-                                  products={products || []}
-                                  value={field.value}
-                                  disabled={productsLoading}
-                                  priceType="purchasePrice"
-                                  placeholder="Search & find product..."
-                                  onSelect={(selected) => {
-                                    field.onChange(selected ? selected.id : '');
-                                    handleProductChange(index, selected ? selected.id : '');
-                                  }}
-                                />
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Controller
-                              control={form.control}
-                              name={`items.${index}.quantity`}
-                              render={({ field }) => (
-                                <Input
-                                  type="number"
-                                  min="0.001"
-                                  step="any"
-                                  placeholder="1"
-                                  className="font-mono text-xs"
-                                  {...field}
-                                />
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Controller
-                              control={form.control}
-                              name={`items.${index}.purchasePrice`}
-                              render={({ field }) => (
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  step="any"
-                                  placeholder="0.00"
-                                  className="font-mono text-xs"
-                                  {...field}
-                                />
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell className="font-semibold font-mono text-xs">
-                            ₹{formatCurrency((watchedItems[index]?.quantity || 0) * (watchedItems[index]?.purchasePrice || 0))}
-                          </TableCell>
-                          <TableCell>
-                            <Button variant="ghost" size="icon" onClick={() => remove(index)}>
-                              <Trash2 className="h-4 w-4 text-red-500" />
-                            </Button>
+                      {fields.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-center py-10 text-muted-foreground text-sm">
+                            No items added yet. Select a product above or scan barcodes.
                           </TableCell>
                         </TableRow>
-                      ))}
+                      ) : (
+                        fields.map((item, index) => {
+                          const product = products?.find((p) => p.id === form.watch(`items.${index}.productId`));
+                          const currentQty = Number(form.watch(`items.${index}.quantity`)) || 0;
+                          const currentPrice = Number(form.watch(`items.${index}.purchasePrice`)) || 0;
+                          const rowTotal = Math.round(currentQty * currentPrice * 100) / 100;
+
+                          return (
+                            <TableRow key={item.id}>
+                              <TableCell className="pl-6">
+                                <div className="font-medium text-foreground">
+                                  {product?.productName || 'Custom Product'}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+                                  {product?.category && (
+                                    <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4 font-normal">
+                                      {product.category}
+                                    </Badge>
+                                  )}
+                                  {product?.barcode && (
+                                    <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded border">
+                                      {product.barcode}
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Controller
+                                  control={form.control}
+                                  name={`items.${index}.quantity`}
+                                  render={({ field }) => (
+                                    <Input
+                                      type="number"
+                                      min="0.001"
+                                      step="any"
+                                      className="font-mono text-xs h-8 w-20"
+                                      {...field}
+                                    />
+                                  )}
+                                />
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Controller
+                                  control={form.control}
+                                  name={`items.${index}.purchasePrice`}
+                                  render={({ field }) => (
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      step="any"
+                                      className="font-mono text-xs h-8 w-24 text-right ml-auto"
+                                      {...field}
+                                    />
+                                  )}
+                                />
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-medium text-xs">
+                                ₹{formatCurrency(rowTotal)}
+                              </TableCell>
+                              <TableCell className="pr-6 text-right">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  onClick={() => remove(index)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  <span className="sr-only">Remove</span>
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
                     </TableBody>
                   </Table>
                 </CardContent>
-                <CardFooter className="justify-start border-t p-4">
-                  <Button type="button" size="sm" variant="ghost" className="gap-1" onClick={handleAddItem}>
-                    <PlusCircle className="h-3.5 w-3.5" /> Add Item
-                  </Button>
-                </CardFooter>
               </Card>
             </div>
 

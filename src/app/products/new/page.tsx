@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import {
   Card,
   CardContent,
@@ -23,26 +24,78 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
-import { useFirestore, addDocumentNonBlocking } from '@/firebase';
-import { collection } from 'firebase/firestore';
+import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
+import { collection, addDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
-import { ScanBarcode, Package } from 'lucide-react';
+import { ScanBarcode, Package, Loader2, Sparkles, AlertTriangle } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
 import { ProductPricingCard } from '@/components/products/product-pricing-card';
 import { CategorySelectField } from '@/components/categories/category-select-field';
+import type { Product } from '@/lib/types';
 
 const productSchema = z.object({
-  productName: z.string().min(1, 'Product name is required'),
-  category: z.string().min(1, 'Category is required'),
-  purchasePrice: z.coerce.number().min(0, 'Purchase price must be positive'),
-  sellingPrice: z.coerce.number().min(0, 'Selling price must be positive'),
-  stockQuantity: z.coerce.number().min(0, 'Stock must be positive'),
-  gstPercentage: z.coerce.number().min(0).max(100, 'GST must be between 0 and 100'),
-  barcode: z.string().optional(),
-  markupPercentage: z.coerce.number().optional(),
-  isGstIncluded: z.boolean().optional(),
-  basePurchasePrice: z.coerce.number().optional(),
+  productName: z.preprocess(
+    (v) => (v == null ? '' : String(v).trim()),
+    z.string().min(1, 'Product name is required')
+  ),
+  category: z.preprocess(
+    (v) => {
+      const s = v == null ? '' : String(v).trim();
+      return s || 'General';
+    },
+    z.string().min(1, 'Category is required')
+  ),
+  purchasePrice: z.preprocess(
+    (v) => {
+      const n = Number(v);
+      return isNaN(n) || n < 0 ? 0 : n;
+    },
+    z.number().min(0, 'Purchase price must be positive')
+  ),
+  sellingPrice: z.preprocess(
+    (v) => {
+      const n = Number(v);
+      return isNaN(n) || n < 0 ? 0 : n;
+    },
+    z.number().min(0, 'Selling price must be positive')
+  ),
+  stockQuantity: z.preprocess(
+    (v) => {
+      const n = Number(v);
+      return isNaN(n) || n < 0 ? 0 : n;
+    },
+    z.number().min(0, 'Stock must be positive')
+  ),
+  gstPercentage: z.preprocess(
+    (v) => {
+      const n = Number(v);
+      return isNaN(n) || n < 0 ? 0 : Math.min(100, n);
+    },
+    z.number().min(0).max(100, 'GST must be between 0 and 100')
+  ),
+  barcode: z.preprocess(
+    (v) => (v == null ? '' : String(v).trim()),
+    z.string().optional().default('')
+  ),
+  markupPercentage: z.preprocess(
+    (v) => {
+      const n = Number(v);
+      return isNaN(n) ? 30 : n;
+    },
+    z.number().optional().default(30)
+  ),
+  isGstIncluded: z.preprocess(
+    (v) => Boolean(v),
+    z.boolean().optional().default(false)
+  ),
+  basePurchasePrice: z.preprocess(
+    (v) => {
+      const n = Number(v);
+      return isNaN(n) || n < 0 ? 0 : n;
+    },
+    z.number().optional().default(0)
+  ),
 });
 
 type ProductFormValues = z.infer<typeof productSchema>;
@@ -52,12 +105,20 @@ export default function NewProductPage() {
   const { toast } = useToast();
   const router = useRouter();
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Load existing products to calculate next WIN00 barcode & check duplicates
+  const allProductsQuery = useMemoFirebase(
+    () => (firestore ? collection(firestore, 'products') : null),
+    [firestore]
+  );
+  const { data: allProducts } = useCollection<Product>(allProductsQuery);
 
   const form = useForm<ProductFormValues>({
     resolver: zodResolver(productSchema),
     defaultValues: {
       productName: '',
-      category: '',
+      category: 'General',
       purchasePrice: 0,
       sellingPrice: 0,
       stockQuantity: 0,
@@ -69,38 +130,126 @@ export default function NewProductPage() {
     },
   });
 
+  // Watch barcode for live duplicate detection
+  const currentBarcode = form.watch('barcode');
+  const duplicateProduct = useMemo(() => {
+    const raw = currentBarcode ? String(currentBarcode).trim().toLowerCase() : '';
+    if (!raw) return null;
+    return (
+      (allProducts || []).find(
+        (p) => p.barcode && String(p.barcode).trim().toLowerCase() === raw
+      ) || null
+    );
+  }, [allProducts, currentBarcode]);
+
+  // Handler to auto-generate the next barcode with prefix "WIN00"
+  const handleAutoGenerateBarcode = () => {
+    let maxNumber = 0;
+    const existingBarcodes = new Set<string>();
+
+    (allProducts || []).forEach((p) => {
+      if (p.barcode) {
+        const trimmed = String(p.barcode).trim();
+        existingBarcodes.add(trimmed.toUpperCase());
+        const match = trimmed.match(/^WIN00(\d+)$/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxNumber) {
+            maxNumber = num;
+          }
+        }
+      }
+    });
+
+    let nextNumber = maxNumber > 0 ? maxNumber + 1 : 101;
+    let candidate = `WIN00${nextNumber}`;
+
+    // Guarantee uniqueness
+    while (existingBarcodes.has(candidate.toUpperCase())) {
+      nextNumber++;
+      candidate = `WIN00${nextNumber}`;
+    }
+
+    form.setValue('barcode', candidate, { shouldValidate: true, shouldDirty: true });
+    toast({
+      title: 'Barcode Generated',
+      description: `Assigned unique barcode "${candidate}" (Prefix: WIN00).`,
+    });
+  };
+
+  const onInvalid = (errors: any) => {
+    console.warn('New product form validation failed:', errors);
+    const errorMessages = Object.entries(errors)
+      .map(([field, err]: [string, any]) => `${field}: ${err?.message || 'Invalid'}`)
+      .join(', ');
+    toast({
+      variant: 'destructive',
+      title: 'Validation Error',
+      description: errorMessages || 'Please check the required product fields.',
+    });
+  };
+
   const onSubmit = async (data: ProductFormValues) => {
-    if (!firestore) return;
+    if (!firestore) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Firestore is not initialized. Please refresh and try again.',
+      });
+      return;
+    }
+
+    setIsSaving(true);
 
     try {
       const isGstIncluded = Boolean(data.isGstIncluded);
-      const baseCost = isGstIncluded && data.gstPercentage > 0
-        ? Math.round(((data.purchasePrice / (1 + data.gstPercentage / 100)) + Number.EPSILON) * 100) / 100
-        : data.purchasePrice;
-      const cleanSellingPrice = Math.round((data.sellingPrice + Number.EPSILON) * 100) / 100;
+      const purchasePrice = Number(data.purchasePrice) || 0;
+      const gstPercentage = Number(data.gstPercentage) || 0;
+      const sellingPrice = Number(data.sellingPrice) || 0;
 
-      const productPayload = {
-        ...data,
+      const baseCost = isGstIncluded && gstPercentage > 0
+        ? Math.round(((purchasePrice / (1 + gstPercentage / 100)) + Number.EPSILON) * 100) / 100
+        : purchasePrice;
+      const cleanSellingPrice = Math.round((sellingPrice + Number.EPSILON) * 100) / 100;
+
+      const markupPercentage = typeof data.markupPercentage === 'number' && !isNaN(data.markupPercentage)
+        ? data.markupPercentage
+        : baseCost > 0
+          ? Math.round(((cleanSellingPrice - baseCost) / baseCost) * 100 * 10) / 10
+          : 30;
+
+      const cleanPayload = {
+        productName: data.productName.trim(),
+        category: data.category.trim(),
+        purchasePrice,
         sellingPrice: cleanSellingPrice,
+        stockQuantity: Number(data.stockQuantity) || 0,
+        gstPercentage,
+        barcode: (data.barcode || '').trim(),
+        markupPercentage,
         isGstIncluded,
         basePurchasePrice: baseCost,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
 
       const productsCollection = collection(firestore, 'products');
-      await addDocumentNonBlocking(productsCollection, productPayload);
+      await addDoc(productsCollection, cleanPayload);
 
       toast({
         title: 'Product Added',
-        description: `${data.productName} has been successfully added to your inventory.`,
+        description: `${cleanPayload.productName} has been successfully added to your inventory.`,
       });
       router.push('/products');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error adding product:', error);
       toast({
         variant: 'destructive',
         title: 'Error',
-        description: 'Failed to add product. Please try again.',
+        description: error?.message || 'Failed to add product. Please try again.',
       });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -111,7 +260,7 @@ export default function NewProductPage() {
         description="Fill out the details below. Selling price is automatically generated using standard markup."
       />
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-6">
           {/* Card 1: Product Information */}
           <Card>
             <CardHeader className="pb-4">
@@ -161,12 +310,34 @@ export default function NewProductPage() {
                 control={form.control}
                 name="barcode"
                 render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Barcode / SKU</FormLabel>
+                  <FormItem className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <FormLabel>Barcode / SKU</FormLabel>
+                      {field.value && (
+                        <Badge variant="outline" className="text-[10px] font-mono">
+                          {field.value}
+                        </Badge>
+                      )}
+                    </div>
                     <div className="flex gap-2">
                       <FormControl>
-                        <Input placeholder="Scan or type barcode" {...field} />
+                        <Input
+                          placeholder="e.g. WIN00123"
+                          className="font-mono"
+                          {...field}
+                          value={field.value ?? ''}
+                        />
                       </FormControl>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={handleAutoGenerateBarcode}
+                        className="gap-1.5 shrink-0 text-primary hover:text-primary font-medium"
+                        title="Auto-generate next unique barcode with prefix WIN00"
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        Auto-Generate
+                      </Button>
                       <Button
                         type="button"
                         variant="outline"
@@ -177,8 +348,23 @@ export default function NewProductPage() {
                         Scan
                       </Button>
                     </div>
+
+                    {/* Warning if barcode already exists on another product */}
+                    {duplicateProduct && (
+                      <div className="flex items-start gap-2 p-2.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs">
+                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-semibold">Barcode Warning: </span>
+                          Barcode &ldquo;<strong>{field.value}</strong>&rdquo; is already assigned to{' '}
+                          <strong className="underline">{duplicateProduct.productName}</strong>
+                          {duplicateProduct.category ? ` (${duplicateProduct.category})` : ''}.
+                          Duplicate barcodes may cause scanner ambiguity during billing.
+                        </div>
+                      </div>
+                    )}
+
                     <FormDescription>
-                      Scan using camera or barcode gun to assign a barcode.
+                      Scan using a camera/gun or click <strong>Auto-Generate</strong> for prefix WIN00 (e.g. WIN00123).
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -209,11 +395,28 @@ export default function NewProductPage() {
 
           {/* Form Actions */}
           <div className="flex justify-end gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={() => router.back()}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSaving}
+              onClick={() => router.back()}
+            >
               Cancel
             </Button>
-            <Button type="submit" size="lg" className="min-w-[140px]">
-              Save Product
+            <Button
+              type="submit"
+              size="lg"
+              disabled={isSaving}
+              className="min-w-[140px] gap-2"
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Product'
+              )}
             </Button>
           </div>
         </form>
@@ -224,7 +427,7 @@ export default function NewProductPage() {
         onOpenChange={setIsScannerOpen}
         mode="set_barcode"
         onBarcodeScannedRaw={(scannedCode) => {
-          form.setValue('barcode', scannedCode);
+          form.setValue('barcode', scannedCode, { shouldValidate: true, shouldDirty: true });
         }}
       />
     </>

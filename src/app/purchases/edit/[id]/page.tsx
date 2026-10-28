@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { z } from 'zod';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -29,10 +29,10 @@ import {
   useCollection,
   useMemoFirebase,
 } from '@/firebase';
-import { collection, doc, runTransaction } from 'firebase/firestore';
+import { collection, doc, runTransaction, query, orderBy } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter, useParams } from 'next/navigation';
-import type { Product, Vendor, Purchase } from '@/lib/types';
+import type { Product, Vendor, Purchase, Category } from '@/lib/types';
 import {
   Select,
   SelectContent,
@@ -56,6 +56,8 @@ import { cn, formatCurrency } from '@/lib/utils';
 import { format, addDays } from 'date-fns';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '@/components/ui/table';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
+import { Badge } from '@/components/ui/badge';
+import { Label } from '@/components/ui/label';
 import { ProductSearchCombobox } from '@/components/products/product-search-combobox';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -89,6 +91,12 @@ export default function EditPurchasePage() {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Item Bar inputs (like Invoice page)
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedProductId, setSelectedProductId] = useState<string>('');
+  const [itemQuantity, setItemQuantity] = useState<number | string>(1);
+  const [itemPrice, setItemPrice] = useState<number | string>('');
+
   // Load existing purchase doc
   const purchaseRef = useMemoFirebase(
     () => (firestore && id ? doc(firestore, 'purchases', id) : null),
@@ -96,12 +104,30 @@ export default function EditPurchasePage() {
   );
   const { data: purchase, isLoading: isPurchaseLoading } = useDoc<Purchase>(purchaseRef);
 
-  // Load products & vendors
+  // Load products & vendors & categories
   const productsQuery = useMemoFirebase(
     () => (firestore ? collection(firestore, 'products') : null),
     [firestore]
   );
   const { data: products, isLoading: productsLoading } = useCollection<Product>(productsQuery);
+
+  const categoriesQuery = useMemoFirebase(
+    () => (firestore ? query(collection(firestore, 'categories'), orderBy('name')) : null),
+    [firestore]
+  );
+  const { data: dbCategories } = useCollection<Category>(categoriesQuery);
+
+  // Extract unique categories for dropdown filter
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    (dbCategories || []).forEach((c) => {
+      if (c.name && c.name.trim()) set.add(c.name.trim());
+    });
+    (products || []).forEach((p) => {
+      if (p.category && p.category.trim()) set.add(p.category.trim());
+    });
+    return ['all', ...Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))];
+  }, [dbCategories, products]);
 
   const vendorsQuery = useMemoFirebase(
     () => (firestore ? collection(firestore, 'vendors') : null),
@@ -198,40 +224,86 @@ export default function EditPurchasePage() {
     }
   };
 
-  const handleAddItem = () => {
-    if (products && products.length > 0) {
-      append({
-        productId: '',
-        quantity: 1,
-        purchasePrice: 0,
-      });
+  const handleProductSelect = (product: Product | null) => {
+    if (product) {
+      setSelectedProductId(product.id);
+      setItemPrice(product.purchasePrice ?? 0);
     } else {
-      toast({
-        variant: 'destructive',
-        title: 'No Products',
-        description: 'Please add products to your catalog first.',
-      });
+      setSelectedProductId('');
+      setItemPrice('');
     }
   };
 
-  const handleProductChange = (index: number, productId: string) => {
-    const currentItem = form.getValues(`items.${index}`);
-    if (!productId) {
-      form.setValue(`items.${index}`, {
-        ...currentItem,
-        productId: '',
-        purchasePrice: 0,
+  const handleAddItem = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
+    if (!selectedProductId) {
+      toast({
+        variant: 'destructive',
+        title: 'Please select a product',
+        description: 'Choose a product from the search combobox before adding.',
       });
       return;
     }
-    const product = products?.find((p) => p.id === productId);
-    if (product) {
-      form.setValue(`items.${index}`, {
-        ...currentItem,
-        productId,
-        purchasePrice: product.purchasePrice || 0,
+
+    const product = products?.find((p) => p.id === selectedProductId);
+    if (!product) {
+      toast({
+        variant: 'destructive',
+        title: 'Product not found',
+        description: 'Selected product could not be identified.',
+      });
+      return;
+    }
+
+    const qty = Number(itemQuantity);
+    if (isNaN(qty) || qty <= 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Invalid quantity',
+        description: 'Quantity must be greater than 0.',
+      });
+      return;
+    }
+
+    const price = Number(itemPrice);
+    if (isNaN(price) || price < 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Invalid price',
+        description: 'Purchase price must be positive.',
+      });
+      return;
+    }
+
+    const currentItems = form.getValues('items') || [];
+    const existingIndex = currentItems.findIndex((i) => i.productId === selectedProductId);
+
+    if (existingIndex > -1) {
+      const existing = currentItems[existingIndex];
+      const newQty = (Number(existing.quantity) || 0) + qty;
+      form.setValue(`items.${existingIndex}.quantity`, newQty, { shouldValidate: true });
+      form.setValue(`items.${existingIndex}.purchasePrice`, price, { shouldValidate: true });
+      toast({
+        title: 'Quantity Updated',
+        description: `Updated ${product.productName} quantity to ${newQty}.`,
+      });
+    } else {
+      append({
+        productId: selectedProductId,
+        quantity: qty,
+        purchasePrice: price,
+      });
+      toast({
+        title: 'Item Added',
+        description: `Added ${product.productName} to purchase list.`,
       });
     }
+
+    // Reset inputs
+    setSelectedProductId('');
+    setItemQuantity(1);
+    setItemPrice('');
   };
 
   const onSubmit = async (data: PurchaseFormValues) => {
@@ -519,12 +591,12 @@ export default function EditPurchasePage() {
                 </CardContent>
               </Card>
 
-              {/* Items Table */}
+              {/* Add Item Bar (Matches Invoice layout) */}
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
                   <div>
-                    <CardTitle className="text-base">Purchase Items & Quantities</CardTitle>
-                    <CardDescription>Adjust items, unit costs, or add restocked products.</CardDescription>
+                    <CardTitle className="text-base font-semibold">Add Purchase Item</CardTitle>
+                    <CardDescription>Filter by category, search product, set cost and quantity.</CardDescription>
                   </div>
                   <Button
                     type="button"
@@ -537,93 +609,184 @@ export default function EditPurchasePage() {
                   </Button>
                 </CardHeader>
                 <CardContent>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-12 items-end">
+                    {/* Category Filter */}
+                    <div className="sm:col-span-3">
+                      <Label className="text-xs font-medium mb-1.5 block">Category</Label>
+                      <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="All Categories" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat} value={cat}>
+                              {cat === 'all' ? 'All Categories' : cat}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Search & Find Product */}
+                    <div className="sm:col-span-4">
+                      <Label className="text-xs font-medium mb-1.5 block">Search & Find Product</Label>
+                      <ProductSearchCombobox
+                        products={products || []}
+                        value={selectedProductId}
+                        filterCategory={selectedCategory}
+                        disabled={productsLoading}
+                        priceType="purchasePrice"
+                        placeholder="Search by name, part no, barcode..."
+                        onSelect={handleProductSelect}
+                      />
+                    </div>
+
+                    {/* Quantity */}
+                    <div className="sm:col-span-2">
+                      <Label className="text-xs font-medium mb-1.5 block">Quantity</Label>
+                      <Input
+                        type="number"
+                        min="0.001"
+                        step="any"
+                        placeholder="1"
+                        className="font-mono"
+                        value={itemQuantity}
+                        onChange={(e) => setItemQuantity(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Purchase Price */}
+                    <div className="sm:col-span-2">
+                      <Label className="text-xs font-medium mb-1.5 block">Price (₹)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0.00"
+                        className="font-mono"
+                        value={itemPrice}
+                        onChange={(e) => setItemPrice(e.target.value)}
+                      />
+                    </div>
+
+                    {/* Add Button */}
+                    <div className="sm:col-span-1">
+                      <Button
+                        type="button"
+                        onClick={handleAddItem}
+                        className="w-full gap-1.5"
+                      >
+                        <PlusCircle className="h-4 w-4" /> Add
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Purchase Items List Table */}
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <CardTitle className="text-base font-semibold">Purchase Items</CardTitle>
+                  {fields.length > 0 && (
+                    <Badge variant="outline" className="text-xs font-mono font-normal">
+                      {fields.length} {fields.length === 1 ? 'item' : 'items'}
+                    </Badge>
+                  )}
+                </CardHeader>
+                <CardContent className="p-0">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-2/5">Product</TableHead>
-                        <TableHead>Quantity</TableHead>
-                        <TableHead>Cost Price (₹)</TableHead>
-                        <TableHead>Total (₹)</TableHead>
-                        <TableHead><span className="sr-only">Remove</span></TableHead>
+                        <TableHead className="pl-6">Product</TableHead>
+                        <TableHead className="w-[110px]">Qty</TableHead>
+                        <TableHead className="w-[130px] text-right">Price (₹)</TableHead>
+                        <TableHead className="w-[130px] text-right">Total (₹)</TableHead>
+                        <TableHead className="w-[50px] pr-6"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {fields.map((item, index) => (
-                        <TableRow key={item.id}>
-                          <TableCell>
-                            <Controller
-                              control={form.control}
-                              name={`items.${index}.productId`}
-                              render={({ field }) => (
-                                <ProductSearchCombobox
-                                  products={products || []}
-                                  value={field.value}
-                                  disabled={productsLoading}
-                                  priceType="purchasePrice"
-                                  placeholder="Search & find product..."
-                                  onSelect={(selected) => {
-                                    field.onChange(selected ? selected.id : '');
-                                    handleProductChange(index, selected ? selected.id : '');
-                                  }}
-                                />
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Controller
-                              control={form.control}
-                              name={`items.${index}.quantity`}
-                              render={({ field }) => (
-                                <Input
-                                  type="number"
-                                  min="0.001"
-                                  step="any"
-                                  placeholder="1"
-                                  className="font-mono text-xs w-24"
-                                  {...field}
-                                />
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Controller
-                              control={form.control}
-                              name={`items.${index}.purchasePrice`}
-                              render={({ field }) => (
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  step="any"
-                                  placeholder="0.00"
-                                  className="font-mono text-xs w-28"
-                                  {...field}
-                                />
-                              )}
-                            />
-                          </TableCell>
-                          <TableCell className="font-semibold font-mono text-xs">
-                            ₹{formatCurrency((watchedItems[index]?.quantity || 0) * (watchedItems[index]?.purchasePrice || 0))}
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => remove(index)}
-                              className="text-red-500 hover:text-red-700"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                      {fields.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-center py-10 text-muted-foreground text-sm">
+                            No items added yet. Select a product above or scan barcodes.
                           </TableCell>
                         </TableRow>
-                      ))}
+                      ) : (
+                        fields.map((item, index) => {
+                          const product = products?.find((p) => p.id === form.watch(`items.${index}.productId`));
+                          const currentQty = Number(form.watch(`items.${index}.quantity`)) || 0;
+                          const currentPrice = Number(form.watch(`items.${index}.purchasePrice`)) || 0;
+                          const rowTotal = Math.round(currentQty * currentPrice * 100) / 100;
+
+                          return (
+                            <TableRow key={item.id}>
+                              <TableCell className="pl-6">
+                                <div className="font-medium text-foreground">
+                                  {product?.productName || 'Custom Product'}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+                                  {product?.category && (
+                                    <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4 font-normal">
+                                      {product.category}
+                                    </Badge>
+                                  )}
+                                  {product?.barcode && (
+                                    <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded border">
+                                      {product.barcode}
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Controller
+                                  control={form.control}
+                                  name={`items.${index}.quantity`}
+                                  render={({ field }) => (
+                                    <Input
+                                      type="number"
+                                      min="0.001"
+                                      step="any"
+                                      className="font-mono text-xs h-8 w-20"
+                                      {...field}
+                                    />
+                                  )}
+                                />
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Controller
+                                  control={form.control}
+                                  name={`items.${index}.purchasePrice`}
+                                  render={({ field }) => (
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      step="any"
+                                      className="font-mono text-xs h-8 w-24 text-right ml-auto"
+                                      {...field}
+                                    />
+                                  )}
+                                />
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-medium text-xs">
+                                ₹{formatCurrency(rowTotal)}
+                              </TableCell>
+                              <TableCell className="pr-6 text-right">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => remove(index)}
+                                  className="text-muted-foreground hover:text-destructive h-8 w-8"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
                     </TableBody>
                   </Table>
                 </CardContent>
-                <CardFooter className="justify-start border-t p-4">
-                  <Button type="button" size="sm" variant="ghost" className="gap-1.5" onClick={handleAddItem}>
-                    <PlusCircle className="h-4 w-4" /> Add Item
-                  </Button>
-                </CardFooter>
               </Card>
             </div>
 

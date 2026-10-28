@@ -130,6 +130,14 @@ export function ProductPricingCard({ form }: ProductPricingCardProps) {
     }
   }, [sellingPrice]);
 
+  // Sync markup percentage when form value changes externally (e.g. form.reset)
+  const formMarkup = Number(form.watch('markupPercentage'));
+  useEffect(() => {
+    if (typeof formMarkup === 'number' && !isNaN(formMarkup) && formMarkup > 0) {
+      setMarkupPct(formMarkup);
+    }
+  }, [formMarkup]);
+
   // Derived effective base purchase cost (excluding GST)
   const effectiveBaseCost = computeBaseCost(purchasePrice, gstPercentage, isGstIncluded);
 
