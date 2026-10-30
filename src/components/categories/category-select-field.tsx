@@ -68,8 +68,10 @@ export function CategorySelectField({
     <>
       <div className="flex items-center gap-2">
         <Select
-          value={value}
-          onValueChange={onChange}
+          value={value || undefined}
+          onValueChange={(val) => {
+            if (val) onChange(val);
+          }}
           disabled={disabled}
         >
           <SelectTrigger className="w-full">

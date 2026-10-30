@@ -32,6 +32,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   useFirestore,
   useCollection,
@@ -677,40 +678,16 @@ export function WhatsappShareManagement() {
             <div className="flex flex-col sm:flex-row items-start sm:items-end gap-4">
               <div className="w-full sm:w-72">
                 <Label className="text-xs font-medium mb-1.5 block">Pick Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="w-full justify-start text-left font-normal">
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {format(singleDate, 'dd-MMM-yyyy')}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={singleDate}
-                      onSelect={(d) => {
-                        if (d) {
-                          setSingleDate(d);
-                          setCustomMessageOverride(null);
-                        }
-                      }}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                <DatePicker
+                  value={singleDate}
+                  onChange={(d) => {
+                    if (d) {
+                      setSingleDate(d);
+                      setCustomMessageOverride(null);
+                    }
+                  }}
+                />
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSingleDate(new Date());
-                  setCustomMessageOverride(null);
-                }}
-                className="text-xs"
-              >
-                Today
-              </Button>
             </div>
           )}
 
@@ -718,51 +695,27 @@ export function WhatsappShareManagement() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label className="text-xs font-medium mb-1.5 block">Start Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="w-full justify-start text-left font-normal">
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {format(customStartDate, 'dd-MMM-yyyy')}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={customStartDate}
-                      onSelect={(d) => {
-                        if (d) {
-                          setCustomStartDate(d);
-                          setCustomMessageOverride(null);
-                        }
-                      }}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                <DatePicker
+                  value={customStartDate}
+                  onChange={(d) => {
+                    if (d) {
+                      setCustomStartDate(d);
+                      setCustomMessageOverride(null);
+                    }
+                  }}
+                />
               </div>
               <div>
                 <Label className="text-xs font-medium mb-1.5 block">End Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="w-full justify-start text-left font-normal">
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {format(customEndDate, 'dd-MMM-yyyy')}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={customEndDate}
-                      onSelect={(d) => {
-                        if (d) {
-                          setCustomEndDate(d);
-                          setCustomMessageOverride(null);
-                        }
-                      }}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                <DatePicker
+                  value={customEndDate}
+                  onChange={(d) => {
+                    if (d) {
+                      setCustomEndDate(d);
+                      setCustomMessageOverride(null);
+                    }
+                  }}
+                />
               </div>
             </div>
           )}

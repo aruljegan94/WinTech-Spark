@@ -83,6 +83,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import { DatePicker } from '@/components/ui/date-picker';
 import { cn, formatCurrency } from '@/lib/utils';
 import { format } from 'date-fns';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -644,28 +645,10 @@ export default function NewInvoicePage() {
             <CardContent className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                  <Label>Invoice Date</Label>
-                 <Popover>
-                  <PopoverTrigger asChild>
-                      <Button
-                        variant={'outline'}
-                        className={cn(
-                          'justify-start text-left font-normal',
-                          !invoiceDate && 'text-muted-foreground'
-                        )}
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {invoiceDate ? format(invoiceDate, 'dd-MMM-yyyy') : <span>Pick a date</span>}
-                      </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar
-                      mode="single"
-                      selected={invoiceDate}
-                      onSelect={(date) => setInvoiceDate(date || new Date())}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                 <DatePicker
+                   value={invoiceDate}
+                   onChange={(date) => setInvoiceDate(date || new Date())}
+                 />
               </div>
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">

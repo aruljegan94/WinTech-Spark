@@ -453,7 +453,7 @@ export default function ReportsPage() {
                 )}
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
+            <PopoverContent className="w-auto p-0 rounded-xl border border-border/80 shadow-2xl bg-card overflow-hidden" align="end">
               <Calendar
                 initialFocus
                 mode="range"

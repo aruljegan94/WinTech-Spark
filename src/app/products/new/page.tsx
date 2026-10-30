@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -28,7 +28,7 @@ import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, addDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
-import { ScanBarcode, Package, Loader2, Sparkles, AlertTriangle } from 'lucide-react';
+import { ScanBarcode, Package, Loader2, Sparkles, AlertTriangle, PlusCircle, Check } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
 import { ProductPricingCard } from '@/components/products/product-pricing-card';
 import { CategorySelectField } from '@/components/categories/category-select-field';
@@ -69,10 +69,11 @@ const productSchema = z.object({
   ),
   gstPercentage: z.preprocess(
     (v) => {
+      if (v === '' || v == null) return 18;
       const n = Number(v);
-      return isNaN(n) || n < 0 ? 0 : Math.min(100, n);
+      return isNaN(n) || n < 0 ? 18 : Math.min(100, n);
     },
-    z.number().min(0).max(100, 'GST must be between 0 and 100')
+    z.number().min(0).max(100, 'GST must be between 0 and 100').default(18)
   ),
   barcode: z.preprocess(
     (v) => (v == null ? '' : String(v).trim()),
@@ -100,12 +101,46 @@ const productSchema = z.object({
 
 type ProductFormValues = z.infer<typeof productSchema>;
 
+// Helper to calculate the next unique barcode with prefix WIN00
+function calculateNextBarcode(products: Product[] | null | undefined): string {
+  let maxNumber = 0;
+  const existingBarcodes = new Set<string>();
+
+  (products || []).forEach((p) => {
+    if (p.barcode) {
+      const trimmed = String(p.barcode).trim();
+      existingBarcodes.add(trimmed.toUpperCase());
+      const match = trimmed.match(/^WIN00(\d+)$/i);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNumber) {
+          maxNumber = num;
+        }
+      }
+    }
+  });
+
+  let nextNumber = maxNumber > 0 ? maxNumber + 1 : 101;
+  let candidate = `WIN00${nextNumber}`;
+
+  while (existingBarcodes.has(candidate.toUpperCase())) {
+    nextNumber++;
+    candidate = `WIN00${nextNumber}`;
+  }
+
+  return candidate;
+}
+
 export default function NewProductPage() {
   const firestore = useFirestore();
   const { toast } = useToast();
   const router = useRouter();
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveMode, setSaveMode] = useState<'save' | 'saveAndNew'>('save');
+
+  const productNameInputRef = useRef<HTMLInputElement | null>(null);
+  const hasAutoAssignedBarcodeRef = useRef(false);
 
   // Load existing products to calculate next WIN00 barcode & check duplicates
   const allProductsQuery = useMemoFirebase(
@@ -122,13 +157,33 @@ export default function NewProductPage() {
       purchasePrice: 0,
       sellingPrice: 0,
       stockQuantity: 0,
-      gstPercentage: 0,
+      gstPercentage: 18, // 18% GST default as requested
       barcode: '',
       markupPercentage: 30,
       isGstIncluded: false,
       basePurchasePrice: 0,
     },
   });
+
+  // Magic 1: Auto-generate the next barcode on mount as soon as products load (if user hasn't set one)
+  useEffect(() => {
+    if (allProducts && !hasAutoAssignedBarcodeRef.current) {
+      const currentVal = form.getValues('barcode');
+      if (!currentVal) {
+        const nextBarcode = calculateNextBarcode(allProducts);
+        form.setValue('barcode', nextBarcode, { shouldValidate: true });
+        hasAutoAssignedBarcodeRef.current = true;
+      }
+    }
+  }, [allProducts, form]);
+
+  // Magic 2: Auto-focus the Product Name field on mount
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      productNameInputRef.current?.focus();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Watch barcode for live duplicate detection
   const currentBarcode = form.watch('barcode');
@@ -142,34 +197,9 @@ export default function NewProductPage() {
     );
   }, [allProducts, currentBarcode]);
 
-  // Handler to auto-generate the next barcode with prefix "WIN00"
+  // Handler to manually regenerate the next barcode
   const handleAutoGenerateBarcode = () => {
-    let maxNumber = 0;
-    const existingBarcodes = new Set<string>();
-
-    (allProducts || []).forEach((p) => {
-      if (p.barcode) {
-        const trimmed = String(p.barcode).trim();
-        existingBarcodes.add(trimmed.toUpperCase());
-        const match = trimmed.match(/^WIN00(\d+)$/i);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (!isNaN(num) && num > maxNumber) {
-            maxNumber = num;
-          }
-        }
-      }
-    });
-
-    let nextNumber = maxNumber > 0 ? maxNumber + 1 : 101;
-    let candidate = `WIN00${nextNumber}`;
-
-    // Guarantee uniqueness
-    while (existingBarcodes.has(candidate.toUpperCase())) {
-      nextNumber++;
-      candidate = `WIN00${nextNumber}`;
-    }
-
+    const candidate = calculateNextBarcode(allProducts);
     form.setValue('barcode', candidate, { shouldValidate: true, shouldDirty: true });
     toast({
       title: 'Barcode Generated',
@@ -236,11 +266,47 @@ export default function NewProductPage() {
       const productsCollection = collection(firestore, 'products');
       await addDoc(productsCollection, cleanPayload);
 
-      toast({
-        title: 'Product Added',
-        description: `${cleanPayload.productName} has been successfully added to your inventory.`,
-      });
-      router.push('/products');
+      if (saveMode === 'saveAndNew') {
+        toast({
+          title: 'Product Saved',
+          description: `"${cleanPayload.productName}" added! Ready for next product.`,
+        });
+
+        // Remember the category to speed up batch entry
+        const previousCategory = data.category.trim() || 'General';
+
+        // Calculate next candidate barcode factoring in the newly created product
+        const updatedMockList: Product[] = [
+          ...(allProducts || []),
+          { id: 'temp', ...cleanPayload } as Product,
+        ];
+        const nextBarcode = calculateNextBarcode(updatedMockList);
+
+        // Reset form for next item
+        form.reset({
+          productName: '',
+          category: previousCategory,
+          purchasePrice: 0,
+          sellingPrice: 0,
+          stockQuantity: 0,
+          gstPercentage: 18,
+          barcode: nextBarcode,
+          markupPercentage: 30,
+          isGstIncluded: false,
+          basePurchasePrice: 0,
+        });
+
+        // Refocus product name input
+        setTimeout(() => {
+          productNameInputRef.current?.focus();
+        }, 80);
+      } else {
+        toast({
+          title: 'Product Added',
+          description: `${cleanPayload.productName} has been successfully added to your inventory.`,
+        });
+        router.push('/products');
+      }
     } catch (error: any) {
       console.error('Error adding product:', error);
       toast({
@@ -253,14 +319,27 @@ export default function NewProductPage() {
     }
   };
 
+  // Keyboard shortcut: Cmd+Enter or Ctrl+Enter to save immediately
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      setSaveMode('save');
+      form.handleSubmit(onSubmit, onInvalid)();
+    }
+  };
+
   return (
     <>
       <PageHeader
         title="Add New Product"
-        description="Fill out the details below. Selling price is automatically generated using standard markup."
+        description="Fill out the details below. Default GST is 18%. Selling price is automatically calculated using standard markup."
       />
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-6">
+        <form
+          onSubmit={form.handleSubmit(onSubmit, onInvalid)}
+          onKeyDown={handleKeyDown}
+          className="space-y-6"
+        >
           {/* Card 1: Product Information */}
           <Card>
             <CardHeader className="pb-4">
@@ -282,7 +361,14 @@ export default function NewProductPage() {
                   <FormItem>
                     <FormLabel>Product Name *</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., Engine Oil 5L" {...field} />
+                      <Input
+                        placeholder="e.g., Castrol Engine Oil 15W-40 5L"
+                        {...field}
+                        ref={(e) => {
+                          field.ref(e);
+                          productNameInputRef.current = e;
+                        }}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -312,9 +398,16 @@ export default function NewProductPage() {
                 render={({ field }) => (
                   <FormItem className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <FormLabel>Barcode / SKU</FormLabel>
+                      <FormLabel className="flex items-center gap-1.5">
+                        <span>Barcode / SKU</span>
+                        {field.value && (
+                          <span className="text-[11px] text-muted-foreground font-normal">
+                            (Auto-assigned)
+                          </span>
+                        )}
+                      </FormLabel>
                       {field.value && (
-                        <Badge variant="outline" className="text-[10px] font-mono">
+                        <Badge variant="outline" className="text-[10px] font-mono bg-primary/5 text-primary border-primary/20">
                           {field.value}
                         </Badge>
                       )}
@@ -323,7 +416,7 @@ export default function NewProductPage() {
                       <FormControl>
                         <Input
                           placeholder="e.g. WIN00123"
-                          className="font-mono"
+                          className="font-mono font-medium"
                           {...field}
                           value={field.value ?? ''}
                         />
@@ -336,7 +429,7 @@ export default function NewProductPage() {
                         title="Auto-generate next unique barcode with prefix WIN00"
                       >
                         <Sparkles className="h-4 w-4" />
-                        Auto-Generate
+                        Next Barcode
                       </Button>
                       <Button
                         type="button"
@@ -364,7 +457,7 @@ export default function NewProductPage() {
                     )}
 
                     <FormDescription>
-                      Scan using a camera/gun or click <strong>Auto-Generate</strong> for prefix WIN00 (e.g. WIN00123).
+                      Unique code for billing & labels. Auto-assigned with prefix WIN00, or scan physical barcode.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -375,14 +468,37 @@ export default function NewProductPage() {
                 control={form.control}
                 name="stockQuantity"
                 render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Initial Stock Quantity</FormLabel>
+                  <FormItem className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <FormLabel>Initial Stock Quantity</FormLabel>
+                      <span className="text-xs text-muted-foreground">Current in-hand stock</span>
+                    </div>
                     <FormControl>
-                      <Input type="number" min="0" step="any" placeholder="0" className="font-mono" {...field} />
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0"
+                        className="font-mono"
+                        {...field}
+                      />
                     </FormControl>
-                    <FormDescription>
-                      The current number of units in stock.
-                    </FormDescription>
+                    {/* Quick stock pill presets */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <span className="text-[11px] text-muted-foreground mr-1">Quick:</span>
+                      {[0, 5, 10, 20, 50, 100].map((qty) => (
+                        <Button
+                          key={qty}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-6 px-2 text-[11px] font-mono rounded-md hover:bg-primary/10 hover:text-primary hover:border-primary/40"
+                          onClick={() => form.setValue('stockQuantity', qty, { shouldValidate: true })}
+                        >
+                          {qty === 0 ? '0 (Out of stock)' : `${qty}`}
+                        </Button>
+                      ))}
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -390,34 +506,54 @@ export default function NewProductPage() {
             </CardContent>
           </Card>
 
-          {/* Card 2: Pricing & Profit Margin (Auto-Calculated) */}
+          {/* Card 2: Pricing & Profit Margin (Auto-Calculated with 18% default GST) */}
           <ProductPricingCard form={form} />
 
           {/* Form Actions */}
-          <div className="flex justify-end gap-3 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isSaving}
-              onClick={() => router.back()}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              size="lg"
-              disabled={isSaving}
-              className="min-w-[140px] gap-2"
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                'Save Product'
-              )}
-            </Button>
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+            <p className="text-xs text-muted-foreground hidden sm:block">
+              Tip: Press <kbd className="px-1.5 py-0.5 rounded bg-muted border font-mono text-[10px]">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 rounded bg-muted border font-mono text-[10px]">Enter</kbd> to save quickly.
+            </p>
+            <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSaving}
+                onClick={() => router.back()}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="secondary"
+                disabled={isSaving}
+                onClick={() => setSaveMode('saveAndNew')}
+                className="gap-1.5 border border-primary/20 hover:border-primary/50 text-primary font-medium"
+                title="Save product and immediately open blank form for next item"
+              >
+                <PlusCircle className="h-4 w-4" />
+                <span>Save & Add Another</span>
+              </Button>
+              <Button
+                type="submit"
+                size="default"
+                disabled={isSaving}
+                onClick={() => setSaveMode('save')}
+                className="min-w-[130px] gap-1.5"
+              >
+                {isSaving && saveMode === 'save' ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" />
+                    <span>Save Product</span>
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </form>
       </Form>

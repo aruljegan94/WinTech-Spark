@@ -116,7 +116,7 @@ export default function EditProductPage() {
 
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const hasInitializedRef = useRef(false);
+  const lastInitializedIdRef = useRef<string | null>(null);
 
   // Single product query
   const productRef = useMemoFirebase(
@@ -199,11 +199,13 @@ export default function EditProductPage() {
   };
 
   useEffect(() => {
-    if (product && !hasInitializedRef.current) {
+    if (product && lastInitializedIdRef.current !== productId) {
       const isGstIncluded = Boolean(product.isGstIncluded);
       const purchasePrice = Number(product.purchasePrice) || 0;
       const sellingPrice = Number(product.sellingPrice) || 0;
-      const gstPercentage = Number(product.gstPercentage) || 0;
+      const gstPercentage = typeof product.gstPercentage === 'number' && !isNaN(product.gstPercentage)
+        ? product.gstPercentage
+        : 18;
 
       const baseCost = isGstIncluded && gstPercentage > 0
         ? Math.round(((purchasePrice / (1 + gstPercentage / 100)) + Number.EPSILON) * 100) / 100
@@ -232,9 +234,9 @@ export default function EditProductPage() {
           : calculatedMarkup,
       });
 
-      hasInitializedRef.current = true;
+      lastInitializedIdRef.current = productId;
     }
-  }, [product, form]);
+  }, [product, productId, form]);
 
   const onInvalid = (errors: any) => {
     console.warn('Product form validation failed:', errors);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -49,6 +49,7 @@ import { parsePurchaseInvoice } from '@/ai/flows/parse-purchase-invoice';
 import type { ParsePurchaseInvoiceOutput } from '@/ai/flows/parse-purchase-invoice-types';
 import { format } from 'date-fns';
 import { formatCurrency } from '@/lib/utils';
+import { CategorySelectField } from '@/components/categories/category-select-field';
 
 interface PurchaseOcrModalProps {
   isOpen: boolean;
@@ -66,6 +67,7 @@ export interface PurchaseOcrItem {
   mrp?: number; // Extracted MRP
   sellingPrice: number; // Selling price (from MRP or markup)
   amountWithGst: number;
+  category?: string;
   matchedProductId?: string;
   matchedBy?: 'barcode' | 'name';
 }
@@ -85,12 +87,26 @@ export function PurchaseOcrModal({
   const [supplierName, setSupplierName] = useState('');
   const [invoiceNo, setInvoiceNo] = useState('');
   const [purchaseDate, setPurchaseDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [invoiceCategory, setInvoiceCategory] = useState<string>('General');
   const [isGstIncluded, setIsGstIncluded] = useState<boolean>(false);
   const [items, setItems] = useState<PurchaseOcrItem[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const firestore = useFirestore();
   const { toast } = useToast();
+
+  // Top categories by product count (excluding General) for 1-click selection
+  const categoryQuickPicks = useMemo(() => {
+    const counts = new Map<string, number>();
+    products.forEach((p) => {
+      const c = (p.category || '').trim();
+      if (c && c.toLowerCase() !== 'general') counts.set(c, (counts.get(c) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name]) => name);
+  }, [products]);
 
   const calculateItemTotal = (quantity: number, price: number, gst: number, gstIncluded: boolean) => {
     const q = Number(quantity) || 0;
@@ -130,6 +146,16 @@ export function PurchaseOcrModal({
         setSupplierName(result.supplierName || '');
         setInvoiceNo(result.invoiceNo || '');
         setPurchaseDate(result.date || format(new Date(), 'yyyy-MM-dd'));
+
+        const rawDetected = (result.category || '').trim();
+        const norm = (s: string) => s.toLowerCase().replace(/s$/, '').trim();
+        const existingCats = Array.from(
+          new Set(products.map((p) => (p.category || '').trim()).filter(Boolean))
+        );
+        const detectedCategory = rawDetected
+          ? existingCats.find((c) => norm(c) === norm(rawDetected)) || rawDetected
+          : 'General';
+        setInvoiceCategory(detectedCategory);
 
         const detectedGstIncluded = Boolean(result.isGstIncluded);
         setIsGstIncluded(detectedGstIncluded);
@@ -181,6 +207,7 @@ export function PurchaseOcrModal({
             mrp: item.mrp,
             sellingPrice,
             amountWithGst: lineTotal,
+            category: detectedCategory,
             matchedProductId: matched?.id,
             matchedBy,
           };
@@ -235,6 +262,17 @@ export function PurchaseOcrModal({
           sellingPrice: newSelling,
         };
       })
+    );
+  };
+
+  const handleInvoiceCategoryChange = (cat: string) => {
+    const cleanCat = (cat || '').trim() || 'General';
+    setInvoiceCategory(cleanCat);
+    setItems((prevItems) =>
+      prevItems.map((item) => ({
+        ...item,
+        category: cleanCat,
+      }))
     );
   };
 
@@ -297,6 +335,7 @@ export function PurchaseOcrModal({
         gstPercentage: 18,
         sellingPrice: 0,
         amountWithGst: 0,
+        category: invoiceCategory || 'General',
       },
     ]);
   };
@@ -406,12 +445,14 @@ export function PurchaseOcrModal({
             itemEntry.barcode = partNoBarcode;
           }
 
+          const itemCategory = (item.category || invoiceCategory || 'General').trim();
+
           if (isNew && newRef) {
             // Create brand-new product with SKU/barcode and selling price
             transaction.set(newRef, sanitizeForFirestore({
               productName: cleanName,
               barcode: partNoBarcode || '',
-              category: 'General',
+              category: itemCategory,
               purchasePrice: basePurchasePrice,
               sellingPrice: finalSellingPrice,
               stockQuantity: qty,
@@ -427,6 +468,11 @@ export function PurchaseOcrModal({
                 stockQuantity: currentStock + qty,
                 purchasePrice: basePurchasePrice,
               };
+              // If existing product lacks a specific category or is 'General', upgrade it to invoiceCategory
+              const existingCat = (prodDoc.data()?.category || '').trim();
+              if ((!existingCat || existingCat === 'General') && itemCategory !== 'General') {
+                updateData.category = itemCategory;
+              }
               // Set barcode if existing product lacks one and partNo is present
               if (!prodDoc.data()?.barcode && partNoBarcode) {
                 updateData.barcode = partNoBarcode;
@@ -454,6 +500,7 @@ export function PurchaseOcrModal({
           supplierName: supplierName.trim() || 'Unknown Supplier',
           invoiceNo: invoiceNo?.trim() || `OCR-${Date.now().toString().slice(-6)}`,
           date: safeIsoDate,
+          category: invoiceCategory || 'General',
           items: finalItems,
           totalAmount: Number(totalCalculatedAmount) || 0,
           isGstIncluded: Boolean(isGstIncluded),
@@ -490,6 +537,7 @@ export function PurchaseOcrModal({
     setPreviewUrl('');
     setSupplierName('');
     setInvoiceNo('');
+    setInvoiceCategory('General');
     setIsGstIncluded(false);
     setItems([]);
     setOcrError(null);
@@ -540,6 +588,7 @@ export function PurchaseOcrModal({
                           gstPercentage: 18,
                           sellingPrice: 0,
                           amountWithGst: 0,
+                          category: invoiceCategory || 'General',
                         },
                       ]);
                     }}
@@ -647,6 +696,48 @@ export function PurchaseOcrModal({
                       onChange={(e) => setPurchaseDate(e.target.value)}
                       className="mt-1"
                     />
+                  </div>
+                </div>
+
+                {/* INVOICE CATEGORY (applies to all items) */}
+                <div className="p-3 rounded-lg border border-primary/25 bg-primary/5 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                    <Label className="font-semibold text-sm flex items-center gap-1.5">
+                      <Tag className="h-4 w-4 text-primary" />
+                      Invoice Category
+                      <span className="text-xs font-normal text-muted-foreground">(applies to all items)</span>
+                    </Label>
+                    <span className="text-[11px] text-muted-foreground">
+                      New products get this category. Matched products still in &quot;General&quot; get upgraded.
+                    </span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <div className="w-full sm:w-80">
+                      <CategorySelectField
+                        value={invoiceCategory}
+                        onChange={handleInvoiceCategoryChange}
+                        placeholder="Select category (e.g. Tyre, Lubricants)..."
+                      />
+                    </div>
+                    {categoryQuickPicks.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {categoryQuickPicks.map((cat) => {
+                          const active = cat.toLowerCase() === invoiceCategory.toLowerCase();
+                          return (
+                            <Button
+                              key={cat}
+                              type="button"
+                              size="sm"
+                              variant={active ? 'default' : 'outline'}
+                              onClick={() => handleInvoiceCategoryChange(cat)}
+                              className="h-7 px-2.5 text-xs rounded-full"
+                            >
+                              {cat}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
 

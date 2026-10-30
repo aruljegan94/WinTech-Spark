@@ -25,6 +25,7 @@ export const ParsePurchaseInvoiceOutputSchema = z.object({
   supplierName: z.string().describe('Extracted supplier / vendor company name'),
   invoiceNo: z.string().describe('Extracted invoice or bill number'),
   date: z.string().describe('Invoice date in YYYY-MM-DD format'),
+  category: z.string().optional().describe('Detected general category of items on the invoice if discernible, e.g. Tyre, Lubricants, Spares, Batteries'),
   isGstIncluded: z.boolean().optional().describe('True if unit prices printed on invoice already include GST (tax-inclusive), false if GST is calculated on top of rates'),
   items: z.array(PurchaseInvoiceItemSchema).describe('List of line items'),
   totalAmount: z.number().describe('Grand total amount of the invoice'),

@@ -23,8 +23,9 @@ Extract all relevant fields into structured JSON matching the output schema:
 1. Supplier / Vendor Name
 2. Invoice / Bill Number
 3. Invoice Date (convert to YYYY-MM-DD format if possible)
-4. GST Tax Mode: Set isGstIncluded to true if the unit prices printed on invoice already include GST/taxes (e.g. retail cash memos, invoices with 'Incl. of all taxes', or where line total equals Qty * Rate), or false if GST is calculated separately and added on top of unit rates.
-5. Line Items: Extract each product item with:
+4. Category: Detect the overarching product category of the invoice if clearly identifiable (e.g. 'Tyre', 'Lubricants', 'Spares', 'Batteries').
+5. GST Tax Mode: Set isGstIncluded to true if the unit prices printed on invoice already include GST/taxes (e.g. retail cash memos, invoices with 'Incl. of all taxes', or where line total equals Qty * Rate), or false if GST is calculated separately and added on top of unit rates.
+6. Line Items: Extract each product item with:
    - Product Name (description of the part/product)
    - Part Number / Item Code / SKU / Barcode: Look for columns like 'Part No', 'Part Number', 'Item Code', 'Article No', 'SKU', or 'Barcode'. Extract this into partNumber.
    - Quantity: Number of units purchased

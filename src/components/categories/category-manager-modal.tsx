@@ -37,6 +37,7 @@ import {
 } from 'firebase/firestore';
 import type { Category, Product } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
+import { cn } from '@/lib/utils';
 
 interface CategoryManagerModalProps {
   isOpen: boolean;
@@ -301,18 +302,42 @@ export function CategoryManagerModal({
                     return (
                       <div
                         key={cat.id || cat.name}
-                        className="flex items-center justify-between py-1.5 px-2 hover:bg-muted/40 rounded-md transition-colors"
+                        onClick={() => {
+                          onCategorySelected?.(cat.name);
+                          toast({
+                            title: 'Category Selected',
+                            description: `Selected "${cat.name}".`,
+                          });
+                          onClose();
+                        }}
+                        className={cn(
+                          "flex items-center justify-between py-2 px-2.5 rounded-lg transition-all cursor-pointer group",
+                          isSelected
+                            ? "bg-primary/10 border border-primary/30"
+                            : "hover:bg-muted/80 border border-transparent"
+                        )}
+                        title={`Click to select "${cat.name}"`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-sm font-medium truncate">{cat.name}</span>
+                          {isSelected ? (
+                            <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                          ) : (
+                            <Tag className="h-4 w-4 text-muted-foreground/60 group-hover:text-primary transition-colors shrink-0" />
+                          )}
+                          <span className={cn("text-sm font-medium truncate", isSelected ? "text-primary font-semibold" : "text-foreground")}>
+                            {cat.name}
+                          </span>
                           {isSelected && (
-                            <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20 shrink-0">
+                            <Badge variant="outline" className="text-[10px] bg-primary/15 text-primary border-primary/20 shrink-0">
                               Selected
                             </Badge>
                           )}
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] text-muted-foreground group-hover:text-primary font-medium hidden sm:inline opacity-0 group-hover:opacity-100 transition-opacity">
+                            Click to select
+                          </span>
                           <Badge
                             variant="secondary"
                             className="text-[11px] font-mono px-2 py-0.5"
@@ -324,7 +349,10 @@ export function CategoryManagerModal({
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                            onClick={() => handlePromptDelete(cat)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePromptDelete(cat);
+                            }}
                             title={`Delete ${cat.name}`}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
