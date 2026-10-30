@@ -12,6 +12,12 @@ export type Product = {
   markupPercentage?: number;
   isGstIncluded?: boolean;
   basePurchasePrice?: number;
+  createdBy?: string;
+  createdByName?: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type Category = {
@@ -56,6 +62,13 @@ export type Purchase = {
   discount?: number;
   dueDate?: string; // ISO or YYYY-MM-DD string
   paymentNotes?: string;
+  category?: string;
+  createdBy?: string;
+  createdByName?: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type PurchaseOrderItem = {
@@ -132,6 +145,12 @@ export type Sale = {
   dueDate?: string;
   notes?: string;
   placeOfSupply?: string;
+  createdBy?: string;
+  createdByName?: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 
@@ -141,6 +160,12 @@ export type Expense = {
   expenseType: string;
   amount: number;
   notes?: string;
+  createdBy?: string;
+  createdByName?: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type User = {
@@ -149,7 +174,10 @@ export type User = {
   email: string;
   phoneNumber?: string;
   role: 'Admin' | 'Editor' | 'Viewer';
-  // No avatar needed as we will use email for fallback
+  createdAt?: string;
+  createdBy?: string;
+  createdByName?: string;
+  isOwner?: boolean;
 };
 
 export type CompanyProfile = {

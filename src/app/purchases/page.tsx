@@ -658,6 +658,11 @@ export default function PurchasesPage() {
 
                       <TableCell className="text-xs">
                         <div className="font-medium text-foreground">{purchase.supplierName}</div>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                          <span className="text-[10px] text-muted-foreground/80 bg-muted/70 px-1.5 py-0.2 rounded font-medium">
+                            by {purchase.createdByName || 'Admin'}
+                          </span>
+                        </div>
                         {linkedVendor ? (
                           <Link
                             href={`/vendors?search=${encodeURIComponent(linkedVendor.companyName)}`}

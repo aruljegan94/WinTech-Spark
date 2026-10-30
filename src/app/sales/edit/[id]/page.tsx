@@ -21,12 +21,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useFirestore, useDoc, useMemoFirebase } from '@/firebase';
+import { useFirestore, useDoc, useMemoFirebase, useUser } from '@/firebase';
 import {
   doc,
   updateDoc,
 } from 'firebase/firestore';
-import type { Sale } from '@/lib/types';
+import type { Sale, User } from '@/lib/types';
 import { PageHeader } from '@/components/page-header';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter, useParams } from 'next/navigation';
@@ -56,6 +56,13 @@ export default function EditInvoicePage() {
     [firestore, id]
   );
   const { data: sale, isLoading: isSaleLoading } = useDoc<Sale>(saleRef);
+
+  const { user: currentAuthUser } = useUser();
+  const currentUserDocRef = useMemoFirebase(
+    () => (firestore && currentAuthUser ? doc(firestore, 'users', currentAuthUser.uid) : null),
+    [firestore, currentAuthUser]
+  );
+  const { data: currentUserDoc } = useDoc<User>(currentUserDocRef);
 
   const [customerName, setCustomerName] = useState('');
   const [customerMobile, setCustomerMobile] = useState('');
@@ -96,6 +103,9 @@ export default function EditInvoicePage() {
             paymentStatus,
             paymentMode,
             amountPaid: paymentStatus === 'Partial' ? amountPaid : (paymentStatus === 'Paid' ? sale.total : 0),
+            updatedBy: currentAuthUser?.uid || '',
+            updatedByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
+            updatedAt: new Date().toISOString(),
         });
 
         toast({

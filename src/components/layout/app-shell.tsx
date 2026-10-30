@@ -235,27 +235,43 @@ export default function AppShell({
 
   const { data: currentUser, isLoading } = useDoc<User>(userRef);
 
+  const isJegan = useMemo(() => {
+    const e = user?.email?.toLowerCase().trim() || "";
+    return e === "jeganwin4@gamil.com" || e === "jeganwin4@gmail.com" || e.startsWith("jegan");
+  }, [user]);
+
   useEffect(() => {
-    if (firestore && user && !isLoading && !currentUser) {
+    if (firestore && user && !isLoading) {
       const userDocRef = doc(firestore, "users", user.uid);
-      setDoc(
-        userDocRef,
-        {
-          email: user.email || "",
-          name: user.displayName || user.email?.split("@")[0] || "Admin",
-          role: "Admin",
-          createdAt: new Date().toISOString(),
-        },
-        { merge: true }
-      ).catch((err) =>
-        console.error("Error auto-creating user profile:", err)
-      );
+      if (!currentUser) {
+        setDoc(
+          userDocRef,
+          {
+            email: user.email || "",
+            name: isJegan ? "Jegan" : user.displayName || user.email?.split("@")[0] || "Admin",
+            role: "Admin",
+            createdAt: new Date().toISOString(),
+            isOwner: isJegan,
+          },
+          { merge: true }
+        ).catch((err) =>
+          console.error("Error auto-creating user profile:", err)
+        );
+      } else if (isJegan && currentUser.role !== "Admin") {
+        setDoc(
+          userDocRef,
+          { role: "Admin", isOwner: true, name: currentUser.name || "Jegan" },
+          { merge: true }
+        ).catch((err) =>
+          console.error("Error upgrading owner to Admin:", err)
+        );
+      }
     }
-  }, [firestore, user, isLoading, currentUser]);
+  }, [firestore, user, isLoading, currentUser, isJegan]);
 
   const isAdmin = useMemo(
-    () => !currentUser || currentUser?.role === "Admin",
-    [currentUser]
+    () => isJegan || !currentUser || currentUser?.role === "Admin",
+    [isJegan, currentUser]
   );
 
   const navSections = useMemo(() => {

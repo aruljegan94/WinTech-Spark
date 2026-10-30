@@ -28,11 +28,13 @@ import {
   useFirestore,
   useCollection,
   useMemoFirebase,
+  useUser,
+  useDoc,
 } from '@/firebase';
 import { collection, doc, runTransaction, getDoc, setDoc, query, orderBy } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
-import type { Product, Vendor, Category } from '@/lib/types';
+import type { Product, Vendor, Category, User } from '@/lib/types';
 import {
   Select,
   SelectContent,
@@ -77,6 +79,13 @@ export default function NewPurchasePage() {
   const { toast } = useToast();
   const router = useRouter();
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+
+  const { user: currentAuthUser } = useUser();
+  const currentUserDocRef = useMemoFirebase(
+    () => (firestore && currentAuthUser ? doc(firestore, 'users', currentAuthUser.uid) : null),
+    [firestore, currentAuthUser]
+  );
+  const { data: currentUserDoc } = useDoc<User>(currentUserDocRef);
 
   // Item Bar inputs (like Invoice page)
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -333,6 +342,9 @@ export default function NewPurchasePage() {
           discount: finalDiscount,
           dueDate: data.dueDate ? data.dueDate.toISOString() : null,
           paymentNotes: data.paymentNotes || '',
+          createdBy: currentAuthUser?.uid || '',
+          createdByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
+          createdAt: new Date().toISOString(),
         });
       });
 

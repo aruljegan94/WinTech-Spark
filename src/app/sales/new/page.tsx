@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking } from '@/firebase';
+import { useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking, useUser } from '@/firebase';
 import {
   collection,
   doc,
@@ -30,7 +30,7 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import type { Product, SaleItem, CompanyProfile, Customer } from '@/lib/types';
+import type { Product, SaleItem, CompanyProfile, Customer, User } from '@/lib/types';
 import {
   CalendarIcon,
   PlusCircle,
@@ -165,6 +165,13 @@ export default function NewInvoicePage() {
     [firestore]
   );
   const { data: salesCounter } = useDoc<{ currentNumber: number; lastResetMonth?: string }>(salesCounterRef);
+
+  const { user: currentAuthUser } = useUser();
+  const currentUserDocRef = useMemoFirebase(
+    () => (firestore && currentAuthUser ? doc(firestore, 'users', currentAuthUser.uid) : null),
+    [firestore, currentAuthUser]
+  );
+  const { data: currentUserDoc } = useDoc<User>(currentUserDocRef);
 
   // Check URL query parameters for customerId (e.g. redirected from Customers page)
   useEffect(() => {
@@ -586,6 +593,9 @@ export default function NewInvoicePage() {
                   paymentStatus,
                   paymentMode,
                   amountPaid: paymentStatus === 'Paid' ? total : paymentStatus === 'Partial' ? (amountPaid || 0) : 0,
+                  createdBy: currentAuthUser?.uid || '',
+                  createdByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
+                  createdAt: new Date().toISOString(),
               };
 
               if (finalCustomerId) {

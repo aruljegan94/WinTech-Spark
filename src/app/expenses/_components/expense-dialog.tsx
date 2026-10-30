@@ -38,9 +38,12 @@ import {
   useFirestore,
   addDocumentNonBlocking,
   setDocumentNonBlocking,
+  useUser,
+  useDoc,
+  useMemoFirebase,
 } from '@/firebase';
 import { collection, doc } from 'firebase/firestore';
-import type { Expense } from '@/lib/types';
+import type { Expense, User } from '@/lib/types';
 import { Loader2, CalendarIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -65,6 +68,12 @@ const expenseTypes = ['Rent', 'Electricity', 'Transport', 'Supplies', 'Salaries'
 export function ExpenseDialog({ isOpen, onOpenChange, expense }: ExpenseDialogProps) {
   const { toast } = useToast();
   const firestore = useFirestore();
+  const { user: currentAuthUser } = useUser();
+  const currentUserDocRef = useMemoFirebase(
+    () => (firestore && currentAuthUser ? doc(firestore, 'users', currentAuthUser.uid) : null),
+    [firestore, currentAuthUser]
+  );
+  const { data: currentUserDoc } = useDoc<User>(currentUserDocRef);
 
   const form = useForm<ExpenseFormValues>({
     resolver: zodResolver(expenseSchema),
@@ -98,15 +107,19 @@ export function ExpenseDialog({ isOpen, onOpenChange, expense }: ExpenseDialogPr
   const onSubmit = async (data: ExpenseFormValues) => {
     if (!firestore) return;
 
-    const expenseData = {
-      ...data,
-      date: data.date.toISOString(),
-    };
+    const currentUserName = currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin';
 
     if (expense) {
       // Editing existing expense
       const docRef = doc(firestore, 'expenses', expense.id);
-      setDocumentNonBlocking(docRef, expenseData, { merge: true });
+      const updateData = {
+        ...data,
+        date: data.date.toISOString(),
+        updatedBy: currentAuthUser?.uid || '',
+        updatedByName: currentUserName,
+        updatedAt: new Date().toISOString(),
+      };
+      setDocumentNonBlocking(docRef, updateData, { merge: true });
       toast({
         title: 'Expense Updated',
         description: 'The expense has been successfully updated.',
@@ -114,7 +127,14 @@ export function ExpenseDialog({ isOpen, onOpenChange, expense }: ExpenseDialogPr
     } else {
       // Creating new expense
       const collectionRef = collection(firestore, 'expenses');
-      await addDocumentNonBlocking(collectionRef, expenseData);
+      const createData = {
+        ...data,
+        date: data.date.toISOString(),
+        createdBy: currentAuthUser?.uid || '',
+        createdByName: currentUserName,
+        createdAt: new Date().toISOString(),
+      };
+      await addDocumentNonBlocking(collectionRef, createData);
       toast({
         title: 'Expense Added',
         description: 'The new expense has been successfully recorded.',

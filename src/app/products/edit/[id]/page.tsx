@@ -24,11 +24,11 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
-import { useFirestore, useDoc, useCollection, useMemoFirebase } from '@/firebase';
+import { useFirestore, useDoc, useCollection, useMemoFirebase, useUser } from '@/firebase';
 import { doc, setDoc, collection } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter, useParams } from 'next/navigation';
-import type { Product } from '@/lib/types';
+import type { Product, User } from '@/lib/types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScanBarcode, Package, Loader2, Sparkles, AlertTriangle } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
@@ -124,6 +124,13 @@ export default function EditProductPage() {
     [firestore, productId]
   );
   const { data: product, isLoading, error: docError } = useDoc<Product>(productRef);
+
+  const { user: currentAuthUser } = useUser();
+  const currentUserDocRef = useMemoFirebase(
+    () => (firestore && currentAuthUser ? doc(firestore, 'users', currentAuthUser.uid) : null),
+    [firestore, currentAuthUser]
+  );
+  const { data: currentUserDoc } = useDoc<User>(currentUserDocRef);
 
   // All products query for duplicate barcode detection and auto-generating next sequence
   const allProductsQuery = useMemoFirebase(
@@ -302,6 +309,8 @@ export default function EditProductPage() {
         markupPercentage,
         isGstIncluded,
         basePurchasePrice: baseCost,
+        updatedBy: currentAuthUser?.uid || '',
+        updatedByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
         updatedAt: new Date().toISOString(),
       };
 

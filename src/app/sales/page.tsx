@@ -488,11 +488,19 @@ export default function SalesPage() {
                       <div className="font-medium text-xs text-foreground leading-tight">
                         {sale.customerName || 'Walk-in Customer'}
                       </div>
-                      {sale.customerMobile && (
-                        <div className="text-[11px] text-muted-foreground font-mono mt-0.5">
-                          {sale.customerMobile}
-                        </div>
-                      )}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                        {sale.customerMobile && (
+                          <span className="text-[11px] text-muted-foreground font-mono">
+                            {sale.customerMobile}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-muted-foreground/80 bg-muted/70 px-1.5 py-0.2 rounded font-medium">
+                          by {sale.createdByName || 'Admin'}
+                          {sale.updatedByName && sale.updatedByName !== sale.createdByName && (
+                            <span className="text-amber-600 dark:text-amber-400"> (ed: {sale.updatedByName})</span>
+                          )}
+                        </span>
+                      </div>
                     </TableCell>
 
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">

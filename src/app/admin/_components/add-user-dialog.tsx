@@ -30,9 +30,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useFirestore, setDocumentNonBlocking, useAuth } from '@/firebase';
-import { doc } from 'firebase/firestore';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { useFirestore, useAuth, useUser } from '@/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, updateProfile, signOut, getAuth } from 'firebase/auth';
+import { initializeApp, deleteApp } from 'firebase/app';
+import { firebaseConfig } from '@/firebase/config';
 import { Loader2 } from 'lucide-react';
 import type { User } from '@/lib/types';
 import { useEffect } from 'react';
@@ -57,6 +59,7 @@ export function AddUserDialog({ isOpen, onOpenChange, isFirstUser }: AddUserDial
   const { toast } = useToast();
   const firestore = useFirestore();
   const auth = useAuth();
+  const { user: currentUser } = useUser();
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userSchema),
@@ -87,36 +90,98 @@ export function AddUserDialog({ isOpen, onOpenChange, isFirstUser }: AddUserDial
   const onSubmit = async (data: UserFormValues) => {
     if (!firestore || !auth) return;
 
+    // If first user, register directly into primary auth so they become logged in
+    if (isFirstUser) {
+      try {
+        const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
+        const authUser = userCredential.user;
+        try {
+          await updateProfile(authUser, { displayName: data.name });
+        } catch (_) {}
+
+        const userDocRef = doc(firestore, 'users', authUser.uid);
+        const userData: Omit<User, 'id'> = {
+          name: data.name,
+          email: data.email,
+          phoneNumber: data.phoneNumber || '',
+          role: 'Admin',
+          createdAt: new Date().toISOString(),
+          isOwner: true,
+        };
+
+        await setDoc(userDocRef, userData);
+
+        toast({
+          title: 'Admin Created',
+          description: `Admin ${data.name} has been successfully created.`,
+        });
+        onOpenChange(false);
+      } catch (error: any) {
+        console.error('Error creating admin user:', error);
+        let errorMessage = error.message || 'Failed to create user.';
+        if (error.code === 'auth/email-already-in-use') {
+          errorMessage = 'This email address is already in use by another account.';
+        }
+        toast({
+          variant: 'destructive',
+          title: 'Error',
+          description: errorMessage,
+        });
+      }
+      return;
+    }
+
+    // Secondary app instance creation so current admin session is NOT signed out!
+    const tempAppName = `user-creator-${Date.now()}`;
+    const tempApp = initializeApp(firebaseConfig, tempAppName);
+    const tempAuth = getAuth(tempApp);
+
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
+      const userCredential = await createUserWithEmailAndPassword(tempAuth, data.email, data.password);
       const authUser = userCredential.user;
+
+      try {
+        await updateProfile(authUser, { displayName: data.name });
+      } catch (_) {}
 
       const userDocRef = doc(firestore, 'users', authUser.uid);
       const userData: Omit<User, 'id'> = {
         name: data.name,
         email: data.email,
-        phoneNumber: data.phoneNumber,
+        phoneNumber: data.phoneNumber || '',
         role: data.role,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.uid || '',
+        createdByName: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Admin',
       };
 
-      setDocumentNonBlocking(userDocRef, userData, { merge: false });
+      await setDoc(userDocRef, userData);
+      await signOut(tempAuth);
 
       toast({
-        title: 'User Created',
-        description: `User ${data.name} has been successfully created.`,
+        title: 'User Created Successfully',
+        description: `User "${data.name}" (${data.role}) created. You remain logged in as Admin.`,
       });
       onOpenChange(false);
     } catch (error: any) {
       console.error('Error creating user:', error);
-      let errorMessage = 'Failed to create user. Please try again.';
+      let errorMessage = error.message || 'Failed to create user.';
       if (error.code === 'auth/email-already-in-use') {
         errorMessage = 'This email address is already in use by another account.';
+      } else if (error.code === 'auth/weak-password') {
+        errorMessage = 'Password is too weak. Please use at least 6 characters.';
       }
       toast({
         variant: 'destructive',
-        title: 'Error',
+        title: 'Failed to create user',
         description: errorMessage,
       });
+    } finally {
+      try {
+        await deleteApp(tempApp);
+      } catch (delErr) {
+        console.warn('Error deleting temp firebase app:', delErr);
+      }
     }
   };
 

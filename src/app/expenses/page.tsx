@@ -567,7 +567,10 @@ export default function ExpensesPage() {
                     </TableCell>
 
                     <TableCell className="text-xs text-muted-foreground">
-                      {expense.notes || '—'}
+                      <div>{expense.notes || '—'}</div>
+                      <div className="text-[10px] text-muted-foreground/80 mt-0.5">
+                        by {expense.createdByName || 'Admin'}
+                      </div>
                     </TableCell>
 
                     <TableCell className="text-right font-semibold text-xs whitespace-nowrap">

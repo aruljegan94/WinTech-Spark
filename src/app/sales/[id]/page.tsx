@@ -301,7 +301,15 @@ export default function SaleDetailsPage() {
             <span className="font-semibold text-foreground text-sm">
               #{sale.invoiceNumber}
             </span>
-            <div className="ml-2">{getStatusBadge(sale.paymentStatus)}</div>
+            <div className="ml-2 flex flex-wrap items-center gap-2">
+              {getStatusBadge(sale.paymentStatus)}
+              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-md">
+                Billed by: <strong className="text-foreground">{sale.createdByName || 'Admin'}</strong>
+                {sale.updatedByName && sale.updatedByName !== sale.createdByName && (
+                  <span> • Last edited by: <strong className="text-foreground">{sale.updatedByName}</strong></span>
+                )}
+              </span>
+            </div>
           </div>
 
           {/* Quick Copy Selector */}
@@ -530,6 +538,12 @@ export default function SaleDetailsPage() {
                 <span className="text-slate-600">Payment Mode:</span>
                 <span className="font-semibold text-slate-900">
                   {sale.paymentMode || 'Cash'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Billed By:</span>
+                <span className="font-medium text-slate-900">
+                  {sale.createdByName || 'Admin'}
                 </span>
               </div>
             </div>

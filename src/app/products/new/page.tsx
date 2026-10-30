@@ -24,15 +24,15 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
-import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { useFirestore, useCollection, useMemoFirebase, useUser, useDoc } from '@/firebase';
+import { collection, addDoc, doc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
 import { ScanBarcode, Package, Loader2, Sparkles, AlertTriangle, PlusCircle, Check } from 'lucide-react';
 import { BarcodeScannerModal } from '@/components/barcode-scanner-modal';
 import { ProductPricingCard } from '@/components/products/product-pricing-card';
 import { CategorySelectField } from '@/components/categories/category-select-field';
-import type { Product } from '@/lib/types';
+import type { Product, User } from '@/lib/types';
 
 const productSchema = z.object({
   productName: z.preprocess(
@@ -135,6 +135,13 @@ export default function NewProductPage() {
   const firestore = useFirestore();
   const { toast } = useToast();
   const router = useRouter();
+  const { user: currentAuthUser } = useUser();
+  const currentUserDocRef = useMemoFirebase(
+    () => (firestore && currentAuthUser ? doc(firestore, 'users', currentAuthUser.uid) : null),
+    [firestore, currentAuthUser]
+  );
+  const { data: currentUserDoc } = useDoc<User>(currentUserDocRef);
+
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMode, setSaveMode] = useState<'save' | 'saveAndNew'>('save');
@@ -259,6 +266,8 @@ export default function NewProductPage() {
         markupPercentage,
         isGstIncluded,
         basePurchasePrice: baseCost,
+        createdBy: currentAuthUser?.uid || '',
+        createdByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

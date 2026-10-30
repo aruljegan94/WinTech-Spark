@@ -41,9 +41,9 @@ import {
   Receipt,
   Info,
 } from 'lucide-react';
-import type { Product } from '@/lib/types';
+import type { Product, User } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
-import { useFirestore } from '@/firebase';
+import { useFirestore, useUser, useDoc, useMemoFirebase } from '@/firebase';
 import { collection, doc, runTransaction } from 'firebase/firestore';
 import { parsePurchaseInvoice } from '@/ai/flows/parse-purchase-invoice';
 import type { ParsePurchaseInvoiceOutput } from '@/ai/flows/parse-purchase-invoice-types';
@@ -94,6 +94,12 @@ export function PurchaseOcrModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const firestore = useFirestore();
   const { toast } = useToast();
+  const { user: currentAuthUser } = useUser();
+  const currentUserDocRef = useMemoFirebase(
+    () => (firestore && currentAuthUser ? doc(firestore, 'users', currentAuthUser.uid) : null),
+    [firestore, currentAuthUser]
+  );
+  const { data: currentUserDoc } = useDoc<User>(currentUserDocRef);
 
   // Top categories by product count (excluding General) for 1-click selection
   const categoryQuickPicks = useMemo(() => {
@@ -509,6 +515,9 @@ export function PurchaseOcrModal({
           discount: 0,
           dueDate: null,
           paymentNotes: 'Imported via AI Invoice Scanner',
+          createdBy: currentAuthUser?.uid || '',
+          createdByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
+          createdAt: new Date().toISOString(),
         }));
       });
 
