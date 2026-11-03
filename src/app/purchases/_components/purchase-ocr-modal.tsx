@@ -81,6 +81,7 @@ export function PurchaseOcrModal({
   const [step, setStep] = useState<'upload' | 'analyzing' | 'verify'>('upload');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const [ocrError, setOcrError] = useState<string | null>(null);
   const [, setPreviewUrl] = useState<string>('');
 
@@ -373,6 +374,7 @@ export function PurchaseOcrModal({
 
   const handleConfirmPurchase = async () => {
     if (!firestore) return;
+    if (isSavingRef.current || isSaving) return;
     if (!supplierName.trim()) {
       toast({ variant: 'destructive', title: 'Supplier Name Required' });
       return;
@@ -382,10 +384,26 @@ export function PurchaseOcrModal({
       return;
     }
 
+    isSavingRef.current = true;
     setIsSaving(true);
     try {
       await runTransaction(firestore, async (transaction) => {
         const purchaseRef = doc(collection(firestore, 'purchases'));
+
+        // Check for duplicate invoice number from this vendor/supplier atomically
+        const cleanInvoiceNo = (invoiceNo?.trim() || '').toUpperCase();
+        let purchaseLockRef: any = null;
+        if (cleanInvoiceNo) {
+          const normalizedVendor = (supplierName || 'vendor').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+          const normalizedInvNo = cleanInvoiceNo.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+          const purchaseLockKey = `${normalizedVendor}__${normalizedInvNo}`;
+          purchaseLockRef = doc(firestore, 'purchase_reservations', purchaseLockKey);
+
+          const lockSnap = await transaction.get(purchaseLockRef);
+          if (lockSnap.exists()) {
+            throw new Error(`A purchase with invoice #${cleanInvoiceNo} from "${supplierName}" has already been recorded.`);
+          }
+        }
 
         // ── PHASE 1: Prepare all refs, then READ all existing products first ─
         const enriched = items.map((item) => ({
@@ -519,6 +537,16 @@ export function PurchaseOcrModal({
           createdByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
           createdAt: new Date().toISOString(),
         }));
+
+        if (purchaseLockRef) {
+          transaction.set(purchaseLockRef, {
+            invoiceNo: cleanInvoiceNo,
+            supplierName: supplierName.trim(),
+            purchaseId: purchaseRef.id,
+            createdAt: new Date().toISOString(),
+            createdBy: currentAuthUser?.uid || '',
+          });
+        }
       });
 
       toast({
@@ -537,6 +565,7 @@ export function PurchaseOcrModal({
         description: error.message || 'Failed to update inventory stock.',
       });
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };

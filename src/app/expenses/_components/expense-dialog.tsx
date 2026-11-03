@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -42,7 +42,7 @@ import {
   useDoc,
   useMemoFirebase,
 } from '@/firebase';
-import { collection, doc } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc } from 'firebase/firestore';
 import type { Expense, User } from '@/lib/types';
 import { Loader2, CalendarIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -103,44 +103,61 @@ export function ExpenseDialog({ isOpen, onOpenChange, expense }: ExpenseDialogPr
   }, [isOpen, expense, form]);
 
   const { isSubmitting } = form.formState;
+  const isSubmittingRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const onSubmit = async (data: ExpenseFormValues) => {
     if (!firestore) return;
+    if (isSubmittingRef.current || submitting || isSubmitting) return;
+    isSubmittingRef.current = true;
+    setSubmitting(true);
 
-    const currentUserName = currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin';
+    try {
+      const currentUserName = currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin';
 
-    if (expense) {
-      // Editing existing expense
-      const docRef = doc(firestore, 'expenses', expense.id);
-      const updateData = {
-        ...data,
-        date: data.date.toISOString(),
-        updatedBy: currentAuthUser?.uid || '',
-        updatedByName: currentUserName,
-        updatedAt: new Date().toISOString(),
-      };
-      setDocumentNonBlocking(docRef, updateData, { merge: true });
+      if (expense) {
+        // Editing existing expense
+        const docRef = doc(firestore, 'expenses', expense.id);
+        const updateData = {
+          ...data,
+          date: data.date.toISOString(),
+          updatedBy: currentAuthUser?.uid || '',
+          updatedByName: currentUserName,
+          updatedAt: new Date().toISOString(),
+        };
+        await updateDoc(docRef, updateData);
+        toast({
+          title: 'Expense Updated',
+          description: 'The expense has been successfully updated.',
+        });
+      } else {
+        // Creating new expense
+        const collectionRef = collection(firestore, 'expenses');
+        const createData = {
+          ...data,
+          date: data.date.toISOString(),
+          createdBy: currentAuthUser?.uid || '',
+          createdByName: currentUserName,
+          createdAt: new Date().toISOString(),
+        };
+        await addDoc(collectionRef, createData);
+        toast({
+          title: 'Expense Added',
+          description: 'The new expense has been successfully recorded.',
+        });
+      }
+      onOpenChange(false);
+    } catch (err: any) {
+      console.error('Error saving expense:', err);
       toast({
-        title: 'Expense Updated',
-        description: 'The expense has been successfully updated.',
+        variant: 'destructive',
+        title: 'Error',
+        description: err.message || 'Failed to save expense.',
       });
-    } else {
-      // Creating new expense
-      const collectionRef = collection(firestore, 'expenses');
-      const createData = {
-        ...data,
-        date: data.date.toISOString(),
-        createdBy: currentAuthUser?.uid || '',
-        createdByName: currentUserName,
-        createdAt: new Date().toISOString(),
-      };
-      await addDocumentNonBlocking(collectionRef, createData);
-      toast({
-        title: 'Expense Added',
-        description: 'The new expense has been successfully recorded.',
-      });
+    } finally {
+      isSubmittingRef.current = false;
+      setSubmitting(false);
     }
-    onOpenChange(false);
   };
 
   return (
@@ -224,11 +241,11 @@ export function ExpenseDialog({ isOpen, onOpenChange, expense }: ExpenseDialogPr
               )}
             />
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting || isSubmitting}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <Button type="submit" disabled={submitting || isSubmitting}>
+                {(submitting || isSubmitting) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {expense ? 'Save Changes' : 'Add Expense'}
               </Button>
             </DialogFooter>

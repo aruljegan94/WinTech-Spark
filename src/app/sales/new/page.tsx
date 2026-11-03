@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -29,6 +29,7 @@ import {
   runTransaction,
   query,
   where,
+  getDocs,
 } from 'firebase/firestore';
 import type { Product, SaleItem, CompanyProfile, Customer, User } from '@/lib/types';
 import {
@@ -95,6 +96,7 @@ import { z } from 'zod';
 const saleItemSchema = z.object({
   productId: z.string().min(1, 'Please select a product'),
   quantity: z.coerce.number().min(0.001, 'Quantity must be greater than 0'),
+  customPrice: z.coerce.number().min(0, 'Price must be 0 or more').optional(),
 });
 
 type SaleItemFormValues = z.infer<typeof saleItemSchema>;
@@ -125,6 +127,7 @@ export default function NewInvoicePage() {
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [discount, setDiscount] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -341,6 +344,7 @@ export default function NewInvoicePage() {
     defaultValues: {
       productId: '',
       quantity: 1,
+      customPrice: undefined,
     }
   });
 
@@ -351,7 +355,17 @@ export default function NewInvoicePage() {
       return;
     }
 
-    if (data.quantity > product.stockQuantity) {
+    const unitPrice = typeof data.customPrice === 'number' && !isNaN(data.customPrice)
+      ? data.customPrice
+      : product.sellingPrice;
+
+    const isService =
+      product.category?.toLowerCase() === 'services' ||
+      product.category?.toLowerCase() === 'labour' ||
+      product.productName.toLowerCase().includes('labour') ||
+      product.productName.toLowerCase().includes('service');
+
+    if (!isService && product.stockQuantity > 0 && data.quantity > product.stockQuantity) {
       toast({
         variant: 'destructive',
         title: 'Stock Limit Exceeded',
@@ -360,13 +374,13 @@ export default function NewInvoicePage() {
       return;
     }
 
-    const existingItemIndex = items.findIndex(item => item.productId === data.productId);
+    const existingItemIndex = items.findIndex(item => item.productId === data.productId && item.price === unitPrice);
     
     if (existingItemIndex > -1) {
       const newItems = [...items];
       const existingItem = newItems[existingItemIndex];
       const newQuantity = existingItem.quantity + data.quantity;
-       if (newQuantity > product.stockQuantity) {
+      if (!isService && product.stockQuantity > 0 && newQuantity > product.stockQuantity) {
         toast({
             variant: 'destructive',
             title: 'Stock Limit Exceeded',
@@ -382,15 +396,57 @@ export default function NewInvoicePage() {
         productId: product.id,
         productName: product.productName,
         quantity: data.quantity,
-        price: product.sellingPrice,
+        price: unitPrice,
         gstPercentage: product.gstPercentage,
-        total: Math.round(data.quantity * product.sellingPrice * 100) / 100,
+        total: Math.round(data.quantity * unitPrice * 100) / 100,
       };
       setItems(prevItems => [...prevItems, newItem]);
     }
     
-    itemForm.reset({ productId: '', quantity: 1 });
+    itemForm.reset({ productId: '', quantity: 1, customPrice: undefined });
     setSelectedCategory('all');
+  };
+
+  const handleUpdateItemPrice = (index: number, newPriceVal: string | number) => {
+    const raw = typeof newPriceVal === 'number' ? newPriceVal : parseFloat(newPriceVal);
+    const validPrice = isNaN(raw) || raw < 0 ? 0 : raw;
+    setItems(prev => {
+      const updated = [...prev];
+      if (!updated[index]) return prev;
+      const item = { ...updated[index] };
+      item.price = validPrice;
+      item.total = Math.round(item.quantity * validPrice * 100) / 100;
+      updated[index] = item;
+      return updated;
+    });
+  };
+
+  const handleUpdateItemTotal = (index: number, newTotalVal: string | number) => {
+    const raw = typeof newTotalVal === 'number' ? newTotalVal : parseFloat(newTotalVal);
+    const validTotal = isNaN(raw) || raw < 0 ? 0 : raw;
+    setItems(prev => {
+      const updated = [...prev];
+      if (!updated[index]) return prev;
+      const item = { ...updated[index] };
+      item.total = validTotal;
+      item.price = item.quantity > 0 ? Math.round((validTotal / item.quantity) * 100) / 100 : validTotal;
+      updated[index] = item;
+      return updated;
+    });
+  };
+
+  const handleUpdateItemQuantity = (index: number, newQtyVal: string | number) => {
+    const raw = typeof newQtyVal === 'number' ? newQtyVal : parseFloat(newQtyVal);
+    const validQty = isNaN(raw) || raw <= 0 ? 0 : raw;
+    setItems(prev => {
+      const updated = [...prev];
+      if (!updated[index]) return prev;
+      const item = { ...updated[index] };
+      item.quantity = validQty;
+      item.total = Math.round(validQty * item.price * 100) / 100;
+      updated[index] = item;
+      return updated;
+    });
   };
 
   const handleScannedProduct = (product: Product, scanQuantity: number) => {
@@ -469,16 +525,25 @@ export default function NewInvoicePage() {
 
 
   const handleSaveInvoice = async () => {
+      if (isSubmittingRef.current || isSubmitting) {
+          return;
+      }
       if (items.length === 0) {
           toast({ variant: 'destructive', title: 'Empty Invoice', description: 'Please add at least one item.'});
           return;
       }
+
+      isSubmittingRef.current = true;
       setIsSubmitting(true);
+
       if (!firestore) {
           toast({ variant: 'destructive', title: 'Error', description: 'Database connection not found.'});
+          isSubmittingRef.current = false;
           setIsSubmitting(false);
           return;
       }
+
+      let savedInvoiceNumber = '';
 
       try {
           await runTransaction(firestore, async (transaction) => {
@@ -507,12 +572,34 @@ export default function NewInvoicePage() {
                   newCount = (cData.currentNumber || 0) + 1;
                 }
               }
-              const invoiceNumber = formatInvoiceNumber({
-                prefix: popoverPrefix || defaultProfile?.invoicePrefix || 'INV-',
-                suffix: popoverSuffix || defaultProfile?.invoiceSuffix || '',
-                sequenceNumber: newCount,
-                date: invoiceDate,
-              });
+
+              let invoiceNumber = '';
+              let lockDocRef: any = null;
+
+              // Find guaranteed unique invoice number atomically
+              while (true) {
+                const candidate = formatInvoiceNumber({
+                  prefix: popoverPrefix || defaultProfile?.invoicePrefix || 'INV-',
+                  suffix: popoverSuffix || defaultProfile?.invoiceSuffix || '',
+                  sequenceNumber: newCount,
+                  date: invoiceDate,
+                });
+
+                const lockKey = candidate.replace(/[\/\s#.:]/g, '_');
+                const candidateLockRef = doc(firestore, 'invoice_reservations', lockKey);
+                const lockSnap = await transaction.get(candidateLockRef);
+
+                if (!lockSnap.exists()) {
+                  invoiceNumber = candidate;
+                  lockDocRef = candidateLockRef;
+                  break;
+                }
+
+                // If collision detected, increment sequence and retry
+                newCount++;
+              }
+
+              savedInvoiceNumber = invoiceNumber;
 
               const productUpdates: { ref: any; newStock: number }[] = [];
               for (let i = 0; i < items.length; i++) {
@@ -523,14 +610,22 @@ export default function NewInvoicePage() {
                       throw new Error(`Product "${item.productName}" not found.`);
                   }
                   
-                  const currentStock = productDoc.data().stockQuantity;
-                  if (currentStock < item.quantity) {
+                  const pData = productDoc.data();
+                  const currentStock = pData.stockQuantity || 0;
+                  const isService =
+                    pData.category?.toLowerCase() === 'services' ||
+                    pData.category?.toLowerCase() === 'labour' ||
+                    item.productName.toLowerCase().includes('labour') ||
+                    item.productName.toLowerCase().includes('service');
+
+                  if (!isService && currentStock < item.quantity) {
                       throw new Error(`Not enough stock for "${item.productName}". Only ${currentStock} left.`);
                   }
 
+                  const newStock = isService ? currentStock : Math.max(0, currentStock - item.quantity);
                   productUpdates.push({
                       ref: productDoc.ref,
-                      newStock: currentStock - item.quantity,
+                      newStock,
                   });
               }
 
@@ -544,6 +639,14 @@ export default function NewInvoicePage() {
               let finalCustomerId = selectedCustomer?.id || '';
 
               // --- 3. WRITE PHASE ---
+              // Atomically reserve the invoice number document
+              transaction.set(lockDocRef, {
+                invoiceNumber,
+                saleId: newInvoiceRef.id,
+                reservedAt: new Date().toISOString(),
+                createdBy: currentAuthUser?.uid || '',
+              });
+
               transaction.set(counterRef, { currentNumber: newCount, lastResetMonth: currentMonthKey }, { merge: true });
 
               for (const update of productUpdates) {
@@ -605,10 +708,9 @@ export default function NewInvoicePage() {
               transaction.set(newInvoiceRef, invoiceData);
           });
 
-
           toast({
               title: 'Invoice Created',
-              description: 'The new invoice has been saved successfully.',
+              description: `Invoice #${savedInvoiceNumber} has been saved successfully.`,
           });
           router.push('/sales');
 
@@ -620,9 +722,10 @@ export default function NewInvoicePage() {
               description: error.message || 'An unexpected error occurred.',
           });
       } finally {
+          isSubmittingRef.current = false;
           setIsSubmitting(false);
       }
-  }
+  };
 
   const handleUpdateInvoiceFormat = () => {
     if (!firestore || !defaultProfile) return;
@@ -837,8 +940,8 @@ export default function NewInvoicePage() {
                             </SelectContent>
                         </Select>
                     </div>
-                     <div className="sm:col-span-5">
-                         <Label>Search & Find Product</Label>
+                     <div className="sm:col-span-4">
+                         <Label className="text-xs">Search & Find Product / Service</Label>
                         <Controller
                             name="productId"
                             control={itemForm.control}
@@ -850,13 +953,38 @@ export default function NewInvoicePage() {
                                     disabled={productsLoading}
                                     priceType="sellingPrice"
                                     placeholder="Search by name, part no, barcode..."
-                                    onSelect={(p) => field.onChange(p ? p.id : '')}
+                                    onSelect={(p) => {
+                                      field.onChange(p ? p.id : '');
+                                      if (p) {
+                                        itemForm.setValue('customPrice', p.sellingPrice);
+                                      } else {
+                                        itemForm.setValue('customPrice', undefined);
+                                      }
+                                    }}
                                 />
                             )}
                         />
                     </div>
-                     <div className="sm:col-span-2">
-                        <Label>Quantity</Label>
+                    <div className="sm:col-span-2">
+                        <Label className="text-xs">Unit Price (₹)</Label>
+                        <Controller
+                            name="customPrice"
+                            control={itemForm.control}
+                            render={({ field }) => (
+                              <Input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="Rate"
+                                className="font-mono text-xs"
+                                value={field.value ?? ''}
+                                onChange={(e) => field.onChange(e.target.value === '' ? undefined : parseFloat(e.target.value) || 0)}
+                              />
+                            )}
+                        />
+                    </div>
+                    <div className="sm:col-span-1">
+                        <Label className="text-xs">Qty</Label>
                         <Controller
                             name="quantity"
                             control={itemForm.control}
@@ -866,66 +994,105 @@ export default function NewInvoicePage() {
                                 min="0.001"
                                 step="any"
                                 placeholder="1"
-                                className="font-mono"
+                                className="font-mono text-xs text-center px-1"
                                 {...field}
                               />
                             )}
                         />
                     </div>
                     <div className="flex items-end sm:col-span-2">
-                        <Button type="submit" className="w-full">
-                            <PlusCircle className="mr-2 h-4 w-4" /> Add
+                        <Button type="submit" className="w-full font-semibold">
+                            <PlusCircle className="mr-1.5 h-4 w-4" /> Add Item
                         </Button>
                     </div>
                 </form>
             </CardContent>
           </Card>
           <Card>
-            <CardHeader>
-              <CardTitle>Invoice Items</CardTitle>
+            <CardHeader className="py-3 px-4 border-b flex flex-row items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-sm font-semibold">Invoice Items</CardTitle>
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
+                  {items.length} {items.length === 1 ? 'item' : 'items'}
+                </Badge>
+              </div>
+              <span className="text-[11px] text-muted-foreground hidden sm:inline">
+                💡 Unit prices and quantities are directly editable in the table
+              </span>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-0">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>Product</TableHead>
-                    <TableHead className="w-[100px]">Qty</TableHead>
-                    <TableHead className="w-[120px] text-right">
-                      Price
-                    </TableHead>
-                    <TableHead className="w-[120px] text-right">
-                      Total
-                    </TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="min-w-[170px]">Product / Service</TableHead>
+                    <TableHead className="w-[105px]">Qty</TableHead>
+                    <TableHead className="w-[145px] text-right">Price (₹)</TableHead>
+                    <TableHead className="w-[125px] text-right">Total (₹)</TableHead>
+                    <TableHead className="w-[45px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {items.length === 0 && (
                       <TableRow>
-                          <TableCell colSpan={5} className="text-center text-muted-foreground">
-                              No items added yet.
+                          <TableCell colSpan={5} className="text-center text-muted-foreground py-8 text-xs">
+                              No items added yet. Search a product or service above or scan barcode to add.
                           </TableCell>
                       </TableRow>
                   )}
                   {items.map((item, index) => (
-                    <TableRow key={index}>
+                    <TableRow key={index} className="hover:bg-muted/30">
                       <TableCell>
-                        {item.productName}
+                        <div className="font-semibold text-xs text-foreground leading-tight">{item.productName}</div>
+                        {item.gstPercentage > 0 && (
+                          <div className="text-[10px] text-muted-foreground mt-0.5">GST: {item.gstPercentage}%</div>
+                        )}
                       </TableCell>
-                      <TableCell className="font-mono">
-                        {item.quantity}
+                      <TableCell>
+                        <Input
+                          type="number"
+                          step="any"
+                          min="0.001"
+                          value={item.quantity}
+                          onChange={(e) => handleUpdateItemQuantity(index, e.target.value)}
+                          className="h-8 w-20 text-center font-mono text-xs bg-background"
+                          title="Edit quantity"
+                        />
                       </TableCell>
-                      <TableCell className="text-right font-mono">
-                        ₹{formatCurrency(item.price)}
+                      <TableCell className="text-right">
+                        <div className="relative inline-flex items-center">
+                          <span className="absolute left-2.5 text-xs text-muted-foreground font-semibold">₹</span>
+                          <Input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={item.price}
+                            onChange={(e) => handleUpdateItemPrice(index, e.target.value)}
+                            className="h-8 w-28 text-right font-mono pr-2 pl-6 text-xs font-semibold bg-background"
+                            title="Edit unit price / service charge"
+                          />
+                        </div>
                       </TableCell>
-                      <TableCell className="text-right font-mono font-medium">
-                        ₹{formatCurrency(item.total)}
+                      <TableCell className="text-right">
+                        <div className="relative inline-flex items-center">
+                          <span className="absolute left-2.5 text-xs text-muted-foreground font-bold">₹</span>
+                          <Input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={item.total}
+                            onChange={(e) => handleUpdateItemTotal(index, e.target.value)}
+                            className="h-8 w-28 text-right font-mono pr-2 pl-6 text-xs font-bold text-foreground bg-background"
+                            title="Edit line total amount directly"
+                          />
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Button
                           variant="ghost"
                           size="icon"
                           onClick={() => handleRemoveItem(index)}
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          title="Remove item"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>

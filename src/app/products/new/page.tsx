@@ -144,6 +144,7 @@ export default function NewProductPage() {
 
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const [saveMode, setSaveMode] = useState<'save' | 'saveAndNew'>('save');
 
   const productNameInputRef = useRef<HTMLInputElement | null>(null);
@@ -236,9 +237,43 @@ export default function NewProductPage() {
       return;
     }
 
+    if (isSavingRef.current || isSaving) return;
+    isSavingRef.current = true;
     setIsSaving(true);
 
     try {
+      // Check duplicate barcode
+      const rawBarcode = data.barcode ? String(data.barcode).trim().toLowerCase() : '';
+      const barcodeConflict = rawBarcode
+        ? (allProducts || []).find((p) => p.barcode && String(p.barcode).trim().toLowerCase() === rawBarcode)
+        : null;
+
+      if (barcodeConflict) {
+        toast({
+          variant: 'destructive',
+          title: 'Duplicate Barcode',
+          description: `Barcode "${data.barcode}" is already assigned to "${barcodeConflict.productName}". Please use a unique barcode.`,
+        });
+        return;
+      }
+
+      // Check duplicate product name in the same category
+      const trimmedName = data.productName.trim().toLowerCase();
+      const trimmedCat = data.category.trim().toLowerCase();
+      const duplicateNamedProduct = (allProducts || []).find(
+        (p) =>
+          p.productName.trim().toLowerCase() === trimmedName &&
+          p.category.trim().toLowerCase() === trimmedCat
+      );
+      if (duplicateNamedProduct) {
+        toast({
+          variant: 'destructive',
+          title: 'Product Already Exists',
+          description: `A product named "${data.productName.trim()}" already exists in category "${data.category.trim()}".`,
+        });
+        return;
+      }
+
       const isGstIncluded = Boolean(data.isGstIncluded);
       const purchasePrice = Number(data.purchasePrice) || 0;
       const gstPercentage = Number(data.gstPercentage) || 0;
@@ -324,6 +359,7 @@ export default function NewProductPage() {
         description: error?.message || 'Failed to add product. Please try again.',
       });
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };

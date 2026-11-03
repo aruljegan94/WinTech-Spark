@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { z } from 'zod';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -43,7 +43,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { CalendarIcon, PlusCircle, Trash2, ScanBarcode, CreditCard, Building2, Calendar as CalendarLucide } from 'lucide-react';
+import { CalendarIcon, PlusCircle, Trash2, ScanBarcode, CreditCard, Building2, Calendar as CalendarLucide, Loader2 } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { DatePicker } from '@/components/ui/date-picker';
 import { cn, formatCurrency } from '@/lib/utils';
@@ -79,6 +79,8 @@ export default function NewPurchasePage() {
   const { toast } = useToast();
   const router = useRouter();
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { user: currentAuthUser } = useUser();
   const currentUserDocRef = useMemoFirebase(
@@ -264,6 +266,9 @@ export default function NewPurchasePage() {
 
   const onSubmit = async (data: PurchaseFormValues) => {
     if (!firestore || !products) return;
+    if (isSubmittingRef.current || isSubmitting) return;
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
 
     try {
       const finalDiscount = Number(data.discount) || 0;
@@ -299,6 +304,18 @@ export default function NewPurchasePage() {
           vendorDocSnap = await transaction.get(vendorRef);
         }
 
+        // Check for duplicate invoice number from this vendor/supplier atomically
+        const cleanInvoiceNo = data.invoiceNo.trim();
+        const normalizedVendor = (resolvedVendorId || data.supplierName || 'vendor').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const normalizedInvNo = cleanInvoiceNo.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const purchaseLockKey = `${normalizedVendor}__${normalizedInvNo}`;
+        const purchaseLockRef = doc(firestore, 'purchase_reservations', purchaseLockKey);
+
+        const lockSnap = await transaction.get(purchaseLockRef);
+        if (lockSnap.exists()) {
+          throw new Error(`Purchase invoice #${cleanInvoiceNo} has already been recorded for this supplier.`);
+        }
+
         // --- 2. LOGIC PHASE ---
         const purchaseItems = data.items.map((item, index) => {
           const product = products.find(p => p.id === item.productId);
@@ -317,6 +334,15 @@ export default function NewPurchasePage() {
         });
 
         // --- 3. WRITE PHASE ---
+        transaction.set(purchaseLockRef, {
+          invoiceNo: cleanInvoiceNo,
+          supplierName: data.supplierName,
+          vendorId: resolvedVendorId || null,
+          purchaseId: purchaseRef.id,
+          createdAt: new Date().toISOString(),
+          createdBy: currentAuthUser?.uid || '',
+        });
+
         productDocs.forEach((productDoc, index) => {
           const currentStock = productDoc.data()!.stockQuantity;
           const newStock = currentStock + data.items[index].quantity;
@@ -360,6 +386,9 @@ export default function NewPurchasePage() {
         title: 'Error',
         description: error.message || 'Failed to record purchase. Please try again.',
       });
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
     }
   };
 
@@ -799,10 +828,11 @@ export default function NewPurchasePage() {
                 </CardContent>
 
                 <CardFooter className="flex-col gap-2">
-                  <Button type="submit" className="w-full">
+                  <Button type="submit" className="w-full" disabled={isSubmitting}>
+                    {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save & Record Purchase
                   </Button>
-                  <Button type="button" variant="outline" className="w-full" onClick={() => router.back()}>
+                  <Button type="button" variant="outline" className="w-full" onClick={() => router.back()} disabled={isSubmitting}>
                     Cancel
                   </Button>
                 </CardFooter>
