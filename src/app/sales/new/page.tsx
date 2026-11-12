@@ -105,7 +105,7 @@ type SaleItemFormValues = z.infer<typeof saleItemSchema>;
 export default function NewInvoicePage() {
   const [items, setItems] = useState<SaleItem[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
-  const [customerName, setCustomerName] = useState('');
+  const [customerName, setCustomerName] = useState('Walk-in Customer');
   const [customerMobile, setCustomerMobile] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [saveToCustomerDb, setSaveToCustomerDb] = useState(true);
@@ -121,7 +121,7 @@ export default function NewInvoicePage() {
   const [isSavingCustomer, setIsSavingCustomer] = useState(false);
 
   const [invoiceDate, setInvoiceDate] = useState<Date>(new Date());
-  
+
   const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Partial' | 'Pending'>('Paid');
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'UPI' | 'Bank Transfer'>('Cash');
   const [amountPaid, setAmountPaid] = useState<number>(0);
@@ -129,9 +129,10 @@ export default function NewInvoicePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isSubmittingRef = useRef(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
-  
+  const [gstIncluded, setGstIncluded] = useState(false); // GST included by default (products have GST set at catalogue level)
+
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  
+
   const firestore = useFirestore();
   const { toast } = useToast();
   const router = useRouter();
@@ -278,7 +279,7 @@ export default function NewInvoicePage() {
       setPopoverAutoReset(!!defaultProfile.autoResetMonthly);
     }
   }, [defaultProfile]);
-  
+
   const autoResetMonthly = popoverAutoReset || (defaultProfile?.autoResetMonthly ?? false);
 
   const nextSequenceNumber = useMemo(() => {
@@ -375,16 +376,16 @@ export default function NewInvoicePage() {
     }
 
     const existingItemIndex = items.findIndex(item => item.productId === data.productId && item.price === unitPrice);
-    
+
     if (existingItemIndex > -1) {
       const newItems = [...items];
       const existingItem = newItems[existingItemIndex];
       const newQuantity = existingItem.quantity + data.quantity;
       if (!isService && product.stockQuantity > 0 && newQuantity > product.stockQuantity) {
         toast({
-            variant: 'destructive',
-            title: 'Stock Limit Exceeded',
-            description: `Cannot add ${data.quantity} more. Only ${product.stockQuantity - existingItem.quantity} units of ${product.productName} left in stock.`,
+          variant: 'destructive',
+          title: 'Stock Limit Exceeded',
+          description: `Cannot add ${data.quantity} more. Only ${product.stockQuantity - existingItem.quantity} units of ${product.productName} left in stock.`,
         });
         return;
       }
@@ -402,7 +403,7 @@ export default function NewInvoicePage() {
       };
       setItems(prevItems => [...prevItems, newItem]);
     }
-    
+
     itemForm.reset({ productId: '', quantity: 1, customPrice: undefined });
     setSelectedCategory('all');
   };
@@ -451,16 +452,16 @@ export default function NewInvoicePage() {
 
   const handleScannedProduct = (product: Product, scanQuantity: number) => {
     const existingItemIndex = items.findIndex(item => item.productId === product.id);
-    
+
     if (existingItemIndex > -1) {
       const newItems = [...items];
       const existingItem = newItems[existingItemIndex];
       const newQuantity = existingItem.quantity + scanQuantity;
       if (newQuantity > product.stockQuantity) {
         toast({
-            variant: 'destructive',
-            title: 'Stock Limit Exceeded',
-            description: `Only ${product.stockQuantity} units of ${product.productName} left in stock.`,
+          variant: 'destructive',
+          title: 'Stock Limit Exceeded',
+          description: `Only ${product.stockQuantity} units of ${product.productName} left in stock.`,
         });
         return;
       }
@@ -499,7 +500,9 @@ export default function NewInvoicePage() {
 
     items.forEach((item) => {
       rawSubtotal += item.total;
-      rawGst += (item.total * item.gstPercentage) / 100;
+      if (gstIncluded) {
+        rawGst += (item.total * item.gstPercentage) / 100;
+      }
     });
 
     const roundedSubtotal = Math.round(rawSubtotal * 100) / 100;
@@ -513,7 +516,7 @@ export default function NewInvoicePage() {
       grossTotal,
       total: netTotal,
     };
-  }, [items, discount]);
+  }, [items, discount, gstIncluded]);
 
   useEffect(() => {
     if (paymentStatus === 'Paid') {
@@ -525,221 +528,222 @@ export default function NewInvoicePage() {
 
 
   const handleSaveInvoice = async () => {
-      if (isSubmittingRef.current || isSubmitting) {
-          return;
-      }
-      if (items.length === 0) {
-          toast({ variant: 'destructive', title: 'Empty Invoice', description: 'Please add at least one item.'});
-          return;
-      }
+    if (isSubmittingRef.current || isSubmitting) {
+      return;
+    }
+    if (items.length === 0) {
+      toast({ variant: 'destructive', title: 'Empty Invoice', description: 'Please add at least one item.' });
+      return;
+    }
 
-      isSubmittingRef.current = true;
-      setIsSubmitting(true);
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
 
-      if (!firestore) {
-          toast({ variant: 'destructive', title: 'Error', description: 'Database connection not found.'});
-          isSubmittingRef.current = false;
-          setIsSubmitting(false);
-          return;
-      }
+    if (!firestore) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Database connection not found.' });
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+      return;
+    }
 
-      let savedInvoiceNumber = '';
+    let savedInvoiceNumber = '';
 
-      try {
-          await runTransaction(firestore, async (transaction) => {
-              const salesCollectionRef = collection(firestore, 'sales');
-              const newInvoiceRef = doc(salesCollectionRef);
-              const counterRef = doc(firestore, 'counters', 'sales');
+    try {
+      await runTransaction(firestore, async (transaction) => {
+        const salesCollectionRef = collection(firestore, 'sales');
+        const newInvoiceRef = doc(salesCollectionRef);
+        const counterRef = doc(firestore, 'counters', 'sales');
 
-              // --- 1. READ PHASE ---
-              const counterDoc = await transaction.get(counterRef);
-              const productDocsPromises = items.map(item => transaction.get(doc(firestore, 'products', item.productId)));
-              const productDocs = await Promise.all(productDocsPromises);
+        // --- 1. READ PHASE ---
+        const counterDoc = await transaction.get(counterRef);
+        const productDocsPromises = items.map(item => transaction.get(doc(firestore, 'products', item.productId)));
+        const productDocs = await Promise.all(productDocsPromises);
 
-              const customerDoc = selectedCustomer
-                ? await transaction.get(doc(firestore, 'customers', selectedCustomer.id))
-                : null;
+        const customerDoc = selectedCustomer
+          ? await transaction.get(doc(firestore, 'customers', selectedCustomer.id))
+          : null;
 
-              // --- 2. LOGIC PHASE ---
-              let newCount = 1;
-              const currentMonthKey = getCurrentMonthKey(invoiceDate);
-              const isMonthlyReset = popoverAutoReset || (defaultProfile?.autoResetMonthly ?? false);
-              if (counterDoc.exists()) {
-                const cData = counterDoc.data();
-                if (isMonthlyReset && cData.lastResetMonth && cData.lastResetMonth !== currentMonthKey) {
-                  newCount = 1;
-                } else {
-                  newCount = (cData.currentNumber || 0) + 1;
-                }
-              }
+        // --- 2. LOGIC PHASE ---
+        let newCount = 1;
+        const currentMonthKey = getCurrentMonthKey(invoiceDate);
+        const isMonthlyReset = popoverAutoReset || (defaultProfile?.autoResetMonthly ?? false);
+        if (counterDoc.exists()) {
+          const cData = counterDoc.data();
+          if (isMonthlyReset && cData.lastResetMonth && cData.lastResetMonth !== currentMonthKey) {
+            newCount = 1;
+          } else {
+            newCount = (cData.currentNumber || 0) + 1;
+          }
+        }
 
-              let invoiceNumber = '';
-              let lockDocRef: any = null;
+        let invoiceNumber = '';
+        let lockDocRef: any = null;
 
-              // Find guaranteed unique invoice number atomically
-              while (true) {
-                const candidate = formatInvoiceNumber({
-                  prefix: popoverPrefix || defaultProfile?.invoicePrefix || 'INV-',
-                  suffix: popoverSuffix || defaultProfile?.invoiceSuffix || '',
-                  sequenceNumber: newCount,
-                  date: invoiceDate,
-                });
-
-                const lockKey = candidate.replace(/[\/\s#.:]/g, '_');
-                const candidateLockRef = doc(firestore, 'invoice_reservations', lockKey);
-                const lockSnap = await transaction.get(candidateLockRef);
-
-                if (!lockSnap.exists()) {
-                  invoiceNumber = candidate;
-                  lockDocRef = candidateLockRef;
-                  break;
-                }
-
-                // If collision detected, increment sequence and retry
-                newCount++;
-              }
-
-              savedInvoiceNumber = invoiceNumber;
-
-              const productUpdates: { ref: any; newStock: number }[] = [];
-              for (let i = 0; i < items.length; i++) {
-                  const item = items[i];
-                  const productDoc = productDocs[i];
-
-                  if (!productDoc.exists()) {
-                      throw new Error(`Product "${item.productName}" not found.`);
-                  }
-                  
-                  const pData = productDoc.data();
-                  const currentStock = pData.stockQuantity || 0;
-                  const isService =
-                    pData.category?.toLowerCase() === 'services' ||
-                    pData.category?.toLowerCase() === 'labour' ||
-                    item.productName.toLowerCase().includes('labour') ||
-                    item.productName.toLowerCase().includes('service');
-
-                  if (!isService && currentStock < item.quantity) {
-                      throw new Error(`Not enough stock for "${item.productName}". Only ${currentStock} left.`);
-                  }
-
-                  const newStock = isService ? currentStock : Math.max(0, currentStock - item.quantity);
-                  productUpdates.push({
-                      ref: productDoc.ref,
-                      newStock,
-                  });
-              }
-
-              const invoicePendingDue =
-                paymentStatus === 'Pending'
-                  ? total
-                  : paymentStatus === 'Partial'
-                  ? Math.max(0, total - (amountPaid || 0))
-                  : 0;
-
-              let finalCustomerId = selectedCustomer?.id || '';
-
-              // --- 3. WRITE PHASE ---
-              // Atomically reserve the invoice number document
-              transaction.set(lockDocRef, {
-                invoiceNumber,
-                saleId: newInvoiceRef.id,
-                reservedAt: new Date().toISOString(),
-                createdBy: currentAuthUser?.uid || '',
-              });
-
-              transaction.set(counterRef, { currentNumber: newCount, lastResetMonth: currentMonthKey }, { merge: true });
-
-              for (const update of productUpdates) {
-                  transaction.update(update.ref, { stockQuantity: update.newStock });
-              }
-
-              const now = new Date().toISOString();
-              if (selectedCustomer && customerDoc && customerDoc.exists()) {
-                const cData = customerDoc.data();
-                transaction.update(customerDoc.ref, {
-                  totalSpent: (cData.totalSpent || 0) + total,
-                  totalInvoices: (cData.totalInvoices || 0) + 1,
-                  pendingDue: (cData.pendingDue || 0) + invoicePendingDue,
-                  address: customerAddress.trim() || cData.address || '',
-                  mobile: customerMobile.trim() || cData.mobile || '',
-                  updatedAt: now,
-                });
-              } else if (saveToCustomerDb && customerName.trim() && customerName.trim() !== 'N/A') {
-                const newCustRef = doc(collection(firestore, 'customers'));
-                finalCustomerId = newCustRef.id;
-                transaction.set(newCustRef, {
-                  id: newCustRef.id,
-                  name: customerName.trim(),
-                  mobile: customerMobile.trim(),
-                  address: customerAddress.trim(),
-                  pendingDue: invoicePendingDue,
-                  totalSpent: total,
-                  totalInvoices: 1,
-                  offers: '',
-                  notes: '',
-                  createdAt: now,
-                  updatedAt: now,
-                });
-              }
-
-              const invoiceData: Record<string, any> = {
-                  invoiceNumber,
-                  date: invoiceDate.toISOString(),
-                  customerName: customerName || 'N/A',
-                  customerMobile: customerMobile || '',
-                  customerAddress: customerAddress || '',
-                  items,
-                  subtotal,
-                  gstAmount,
-                  total,
-                  discount: discount || 0,
-                  paymentStatus,
-                  paymentMode,
-                  amountPaid: paymentStatus === 'Paid' ? total : paymentStatus === 'Partial' ? (amountPaid || 0) : 0,
-                  createdBy: currentAuthUser?.uid || '',
-                  createdByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
-                  createdAt: new Date().toISOString(),
-              };
-
-              if (finalCustomerId) {
-                  invoiceData.customerId = finalCustomerId;
-              }
-
-              transaction.set(newInvoiceRef, invoiceData);
+        // Find guaranteed unique invoice number atomically
+        while (true) {
+          const candidate = formatInvoiceNumber({
+            prefix: popoverPrefix || defaultProfile?.invoicePrefix || 'INV-',
+            suffix: popoverSuffix || defaultProfile?.invoiceSuffix || '',
+            sequenceNumber: newCount,
+            date: invoiceDate,
           });
 
-          toast({
-              title: 'Invoice Created',
-              description: `Invoice #${savedInvoiceNumber} has been saved successfully.`,
-          });
-          router.push('/sales');
+          const lockKey = candidate.replace(/[\/\s#.:]/g, '_');
+          const candidateLockRef = doc(firestore, 'invoice_reservations', lockKey);
+          const lockSnap = await transaction.get(candidateLockRef);
 
-      } catch (error: any) {
-          console.error("Failed to save invoice: ", error);
-          toast({
-              variant: 'destructive',
-              title: 'Error Saving Invoice',
-              description: error.message || 'An unexpected error occurred.',
+          if (!lockSnap.exists()) {
+            invoiceNumber = candidate;
+            lockDocRef = candidateLockRef;
+            break;
+          }
+
+          // If collision detected, increment sequence and retry
+          newCount++;
+        }
+
+        savedInvoiceNumber = invoiceNumber;
+
+        const productUpdates: { ref: any; newStock: number }[] = [];
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const productDoc = productDocs[i];
+
+          if (!productDoc.exists()) {
+            throw new Error(`Product "${item.productName}" not found.`);
+          }
+
+          const pData = productDoc.data();
+          const currentStock = pData.stockQuantity || 0;
+          const isService =
+            pData.category?.toLowerCase() === 'services' ||
+            pData.category?.toLowerCase() === 'labour' ||
+            item.productName.toLowerCase().includes('labour') ||
+            item.productName.toLowerCase().includes('service');
+
+          if (!isService && currentStock < item.quantity) {
+            throw new Error(`Not enough stock for "${item.productName}". Only ${currentStock} left.`);
+          }
+
+          const newStock = isService ? currentStock : Math.max(0, currentStock - item.quantity);
+          productUpdates.push({
+            ref: productDoc.ref,
+            newStock,
           });
-      } finally {
-          isSubmittingRef.current = false;
-          setIsSubmitting(false);
-      }
+        }
+
+        const invoicePendingDue =
+          paymentStatus === 'Pending'
+            ? total
+            : paymentStatus === 'Partial'
+              ? Math.max(0, total - (amountPaid || 0))
+              : 0;
+
+        let finalCustomerId = selectedCustomer?.id || '';
+
+        // --- 3. WRITE PHASE ---
+        // Atomically reserve the invoice number document
+        transaction.set(lockDocRef, {
+          invoiceNumber,
+          saleId: newInvoiceRef.id,
+          reservedAt: new Date().toISOString(),
+          createdBy: currentAuthUser?.uid || '',
+        });
+
+        transaction.set(counterRef, { currentNumber: newCount, lastResetMonth: currentMonthKey }, { merge: true });
+
+        for (const update of productUpdates) {
+          transaction.update(update.ref, { stockQuantity: update.newStock });
+        }
+
+        const now = new Date().toISOString();
+        if (selectedCustomer && customerDoc && customerDoc.exists()) {
+          const cData = customerDoc.data();
+          transaction.update(customerDoc.ref, {
+            totalSpent: (cData.totalSpent || 0) + total,
+            totalInvoices: (cData.totalInvoices || 0) + 1,
+            pendingDue: (cData.pendingDue || 0) + invoicePendingDue,
+            address: customerAddress.trim() || cData.address || '',
+            mobile: customerMobile.trim() || cData.mobile || '',
+            updatedAt: now,
+          });
+        } else if (saveToCustomerDb && customerName.trim() && customerName.trim() !== 'Walk-in Customer' && customerName.trim() !== 'N/A') {
+          const newCustRef = doc(collection(firestore, 'customers'));
+          finalCustomerId = newCustRef.id;
+          transaction.set(newCustRef, {
+            id: newCustRef.id,
+            name: customerName.trim(),
+            mobile: customerMobile.trim(),
+            address: customerAddress.trim(),
+            pendingDue: invoicePendingDue,
+            totalSpent: total,
+            totalInvoices: 1,
+            offers: '',
+            notes: '',
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+
+        const invoiceData: Record<string, any> = {
+          invoiceNumber,
+          date: invoiceDate.toISOString(),
+          customerName: customerName || 'Walk-in Customer',
+          customerMobile: customerMobile || '',
+          customerAddress: customerAddress || '',
+          items,
+          subtotal,
+          gstAmount,
+          gstIncluded,
+          total,
+          discount: discount || 0,
+          paymentStatus,
+          paymentMode,
+          amountPaid: paymentStatus === 'Paid' ? total : paymentStatus === 'Partial' ? (amountPaid || 0) : 0,
+          createdBy: currentAuthUser?.uid || '',
+          createdByName: currentUserDoc?.name || currentAuthUser?.displayName || currentAuthUser?.email?.split('@')[0] || 'Admin',
+          createdAt: new Date().toISOString(),
+        };
+
+        if (finalCustomerId) {
+          invoiceData.customerId = finalCustomerId;
+        }
+
+        transaction.set(newInvoiceRef, invoiceData);
+      });
+
+      toast({
+        title: 'Invoice Created',
+        description: `Invoice #${savedInvoiceNumber} has been saved successfully.`,
+      });
+      router.push('/sales');
+
+    } catch (error: any) {
+      console.error("Failed to save invoice: ", error);
+      toast({
+        variant: 'destructive',
+        title: 'Error Saving Invoice',
+        description: error.message || 'An unexpected error occurred.',
+      });
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   const handleUpdateInvoiceFormat = () => {
     if (!firestore || !defaultProfile) return;
-    
+
     const profileRef = doc(firestore, 'companyProfiles', defaultProfile.id);
     setDocumentNonBlocking(profileRef, {
-        invoicePrefix: popoverPrefix,
-        invoiceSuffix: popoverSuffix,
-        autoResetMonthly: popoverAutoReset,
+      invoicePrefix: popoverPrefix,
+      invoiceSuffix: popoverSuffix,
+      autoResetMonthly: popoverAutoReset,
     }, { merge: true });
 
     toast({
-        title: 'Invoice Format Updated',
-        description: 'The default invoice format and reset preferences have been saved.'
+      title: 'Invoice Format Updated',
+      description: 'The default invoice format and reset preferences have been saved.'
     });
   }
 
@@ -751,160 +755,160 @@ export default function NewInvoicePage() {
       />
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <div className="grid auto-rows-max items-start gap-4 lg:col-span-2">
-           <Card>
+          <Card>
             <CardHeader>
               <CardTitle>Invoice Details</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                 <Label>Invoice Date</Label>
-                 <DatePicker
-                   value={invoiceDate}
-                   onChange={(date) => setInvoiceDate(date || new Date())}
-                 />
+                <Label>Invoice Date</Label>
+                <DatePicker
+                  value={invoiceDate}
+                  onChange={(date) => setInvoiceDate(date || new Date())}
+                />
               </div>
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
-                    <Label>Next Invoice Number</Label>
-                    <div className="flex items-center gap-1">
-                      {/* Reset to 001 Action with Reset Icon */}
-                      <AlertDialog open={isResetDialogOpen} onOpenChange={setIsResetDialogOpen}>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400"
-                            title="Reset invoice sequence to 001"
+                  <Label>Next Invoice Number</Label>
+                  <div className="flex items-center gap-1">
+                    {/* Reset to 001 Action with Reset Icon */}
+                    <AlertDialog open={isResetDialogOpen} onOpenChange={setIsResetDialogOpen}>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400"
+                          title="Reset invoice sequence to 001"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle className="flex items-center gap-2">
+                            <RotateCcw className="h-5 w-5 text-amber-500" />
+                            Reset Invoice Sequence to 001?
+                          </AlertDialogTitle>
+                          <AlertDialogDescription className="space-y-2">
+                            <p>
+                              This will reset the sequence counter to 0. The next created invoice will start at <strong>001</strong>.
+                            </p>
+                            <div className="p-2.5 rounded bg-muted font-mono text-xs text-foreground">
+                              Next Invoice will be: <strong>{formatInvoiceNumber({ prefix: popoverPrefix, suffix: popoverSuffix, sequenceNumber: 1, date: invoiceDate })}</strong>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              Previously saved invoices will not be affected.
+                            </p>
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={handleResetCounter}
+                            disabled={isResettingCounter}
+                            className="bg-amber-600 hover:bg-amber-700 text-white"
                           >
-                            <RotateCcw className="h-3.5 w-3.5" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle className="flex items-center gap-2">
-                              <RotateCcw className="h-5 w-5 text-amber-500" />
-                              Reset Invoice Sequence to 001?
-                            </AlertDialogTitle>
-                            <AlertDialogDescription className="space-y-2">
-                              <p>
-                                This will reset the sequence counter to 0. The next created invoice will start at <strong>001</strong>.
-                              </p>
-                              <div className="p-2.5 rounded bg-muted font-mono text-xs text-foreground">
-                                Next Invoice will be: <strong>{formatInvoiceNumber({ prefix: popoverPrefix, suffix: popoverSuffix, sequenceNumber: 1, date: invoiceDate })}</strong>
+                            {isResettingCounter ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Yes, Reset to 001'}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" title="Configure Invoice Format">
+                          <Settings2 className="h-4 w-4" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-80">
+                        <div className="grid gap-3 text-xs">
+                          <div className="space-y-1">
+                            <h4 className="font-semibold leading-none text-sm">Invoice Number Format</h4>
+                            <p className="text-[11px] text-muted-foreground">
+                              Set the prefix, suffix, and monthly reset behavior.
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-3 items-center gap-2">
+                            <Label htmlFor="prefix" className="text-xs">Prefix</Label>
+                            <Input
+                              id="prefix"
+                              value={popoverPrefix}
+                              onChange={(e) => setPopoverPrefix(e.target.value)}
+                              className="col-span-2 h-8 font-mono text-xs uppercase"
+                              placeholder="INV-"
+                            />
+                          </div>
+                          <div className="grid grid-cols-3 items-center gap-2">
+                            <Label htmlFor="suffix" className="text-xs">Suffix</Label>
+                            <Input
+                              id="suffix"
+                              value={popoverSuffix}
+                              onChange={(e) => setPopoverSuffix(e.target.value)}
+                              className="col-span-2 h-8 font-mono text-xs uppercase"
+                              placeholder="/26"
+                            />
+                          </div>
+
+                          {/* Dynamic date tokens */}
+                          <div className="space-y-1 bg-muted/40 p-2 rounded border">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-muted-foreground">Insert Date Token:</span>
+                              <div className="flex flex-wrap gap-1">
+                                {['{YY}', '{MM}', '{MMM}', '{YYYY}', '{FY}'].map((t) => (
+                                  <Badge
+                                    key={t}
+                                    variant="secondary"
+                                    className="text-[10px] px-1 py-0 cursor-pointer font-mono hover:bg-primary/20"
+                                    onClick={() => setPopoverPrefix((prev) => `${prev}${t}`)}
+                                  >
+                                    +{t}
+                                  </Badge>
+                                ))}
                               </div>
-                              <p className="text-[11px] text-muted-foreground">
-                                Previously saved invoices will not be affected.
-                              </p>
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={handleResetCounter}
-                              disabled={isResettingCounter}
-                              className="bg-amber-600 hover:bg-amber-700 text-white"
-                            >
-                              {isResettingCounter ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Yes, Reset to 001'}
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-
-                      <Popover>
-                        <PopoverTrigger asChild>
-                             <Button variant="ghost" size="icon" className="h-6 w-6" title="Configure Invoice Format">
-                                <Settings2 className="h-4 w-4"/>
-                             </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-80">
-                          <div className="grid gap-3 text-xs">
-                            <div className="space-y-1">
-                              <h4 className="font-semibold leading-none text-sm">Invoice Number Format</h4>
-                              <p className="text-[11px] text-muted-foreground">
-                                Set the prefix, suffix, and monthly reset behavior.
-                              </p>
-                            </div>
-                            <div className="grid grid-cols-3 items-center gap-2">
-                              <Label htmlFor="prefix" className="text-xs">Prefix</Label>
-                              <Input
-                                id="prefix"
-                                value={popoverPrefix}
-                                onChange={(e) => setPopoverPrefix(e.target.value)}
-                                className="col-span-2 h-8 font-mono text-xs uppercase"
-                                placeholder="INV-"
-                              />
-                            </div>
-                            <div className="grid grid-cols-3 items-center gap-2">
-                              <Label htmlFor="suffix" className="text-xs">Suffix</Label>
-                              <Input
-                                id="suffix"
-                                value={popoverSuffix}
-                                onChange={(e) => setPopoverSuffix(e.target.value)}
-                                className="col-span-2 h-8 font-mono text-xs uppercase"
-                                placeholder="/26"
-                              />
-                            </div>
-
-                            {/* Dynamic date tokens */}
-                            <div className="space-y-1 bg-muted/40 p-2 rounded border">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] text-muted-foreground">Insert Date Token:</span>
-                                <div className="flex flex-wrap gap-1">
-                                  {['{YY}', '{MM}', '{MMM}', '{YYYY}', '{FY}'].map((t) => (
-                                    <Badge
-                                      key={t}
-                                      variant="secondary"
-                                      className="text-[10px] px-1 py-0 cursor-pointer font-mono hover:bg-primary/20"
-                                      onClick={() => setPopoverPrefix((prev) => `${prev}${t}`)}
-                                    >
-                                      +{t}
-                                    </Badge>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Monthly Auto Reset */}
-                            <div className="flex items-center justify-between p-2 rounded border bg-card">
-                              <div className="space-y-0.5">
-                                <div className="font-medium text-xs">Auto-Reset Monthly</div>
-                                <div className="text-[10px] text-muted-foreground">Restart sequence from 001 each month</div>
-                              </div>
-                              <Switch
-                                checked={popoverAutoReset}
-                                onCheckedChange={setPopoverAutoReset}
-                              />
-                            </div>
-
-                            <div className="p-2 rounded bg-muted/60 font-mono text-[11px] text-muted-foreground">
-                              Preview: <strong className="text-foreground">{nextInvoiceNumber}</strong>
-                            </div>
-
-                            <div className="flex gap-2 pt-1">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs flex-1 gap-1 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800"
-                                onClick={handleResetCounter}
-                              >
-                                <RotateCcw className="h-3 w-3" />
-                                Reset to 001
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                className="h-7 text-xs flex-1"
-                                onClick={handleUpdateInvoiceFormat}
-                              >
-                                Save Format
-                              </Button>
                             </div>
                           </div>
-                        </PopoverContent>
+
+                          {/* Monthly Auto Reset */}
+                          <div className="flex items-center justify-between p-2 rounded border bg-card">
+                            <div className="space-y-0.5">
+                              <div className="font-medium text-xs">Auto-Reset Monthly</div>
+                              <div className="text-[10px] text-muted-foreground">Restart sequence from 001 each month</div>
+                            </div>
+                            <Switch
+                              checked={popoverAutoReset}
+                              onCheckedChange={setPopoverAutoReset}
+                            />
+                          </div>
+
+                          <div className="p-2 rounded bg-muted/60 font-mono text-[11px] text-muted-foreground">
+                            Preview: <strong className="text-foreground">{nextInvoiceNumber}</strong>
+                          </div>
+
+                          <div className="flex gap-2 pt-1">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs flex-1 gap-1 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800"
+                              onClick={handleResetCounter}
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              Reset to 001
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-7 text-xs flex-1"
+                              onClick={handleUpdateInvoiceFormat}
+                            >
+                              Save Format
+                            </Button>
+                          </div>
+                        </div>
+                      </PopoverContent>
                     </Popover>
-                    </div>
+                  </div>
                 </div>
                 <Input
                   id="invoice-number"
@@ -917,95 +921,95 @@ export default function NewInvoicePage() {
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle>Add Invoice Item</CardTitle>
-                <Button type="button" variant="outline" size="sm" onClick={() => setIsScannerOpen(true)} className="gap-2">
-                    <ScanBarcode className="h-4 w-4" />
-                    Scan Barcode
-                </Button>
+              <CardTitle>Add Invoice Item</CardTitle>
+              <Button type="button" variant="outline" size="sm" onClick={() => setIsScannerOpen(true)} className="gap-2">
+                <ScanBarcode className="h-4 w-4" />
+                Scan Barcode
+              </Button>
             </CardHeader>
             <CardContent>
-                <form onSubmit={itemForm.handleSubmit(handleAddItem)} className="grid grid-cols-1 gap-4 sm:grid-cols-12">
-                    <div className="sm:col-span-3">
-                        <Label>Category</Label>
-                        <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-                            <SelectTrigger>
-                                <SelectValue placeholder="Select category" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {categories
-                                    .filter((cat) => Boolean(cat && cat.trim()))
-                                    .map(cat => (
-                                        <SelectItem key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                     <div className="sm:col-span-4">
-                         <Label className="text-xs">Search & Find Product / Service</Label>
-                        <Controller
-                            name="productId"
-                            control={itemForm.control}
-                            render={({ field }) => (
-                                <ProductSearchCombobox
-                                    products={products || []}
-                                    value={field.value}
-                                    filterCategory={selectedCategory}
-                                    disabled={productsLoading}
-                                    priceType="sellingPrice"
-                                    placeholder="Search by name, part no, barcode..."
-                                    onSelect={(p) => {
-                                      field.onChange(p ? p.id : '');
-                                      if (p) {
-                                        itemForm.setValue('customPrice', p.sellingPrice);
-                                      } else {
-                                        itemForm.setValue('customPrice', undefined);
-                                      }
-                                    }}
-                                />
-                            )}
-                        />
-                    </div>
-                    <div className="sm:col-span-2">
-                        <Label className="text-xs">Unit Price (₹)</Label>
-                        <Controller
-                            name="customPrice"
-                            control={itemForm.control}
-                            render={({ field }) => (
-                              <Input
-                                type="number"
-                                step="any"
-                                min="0"
-                                placeholder="Rate"
-                                className="font-mono text-xs"
-                                value={field.value ?? ''}
-                                onChange={(e) => field.onChange(e.target.value === '' ? undefined : parseFloat(e.target.value) || 0)}
-                              />
-                            )}
-                        />
-                    </div>
-                    <div className="sm:col-span-1">
-                        <Label className="text-xs">Qty</Label>
-                        <Controller
-                            name="quantity"
-                            control={itemForm.control}
-                            render={({ field }) => (
-                              <Input
-                                type="number"
-                                min="0.001"
-                                step="any"
-                                placeholder="1"
-                                className="font-mono text-xs text-center px-1"
-                                {...field}
-                              />
-                            )}
-                        />
-                    </div>
-                    <div className="flex items-end sm:col-span-2">
-                        <Button type="submit" className="w-full font-semibold">
-                            <PlusCircle className="mr-1.5 h-4 w-4" /> Add Item
-                        </Button>
-                    </div>
-                </form>
+              <form onSubmit={itemForm.handleSubmit(handleAddItem)} className="grid grid-cols-1 gap-4 sm:grid-cols-12">
+                <div className="sm:col-span-3">
+                  <Label>Category</Label>
+                  <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {categories
+                        .filter((cat) => Boolean(cat && cat.trim()))
+                        .map(cat => (
+                          <SelectItem key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="sm:col-span-4">
+                  <Label className="text-xs">Search & Find Product / Service</Label>
+                  <Controller
+                    name="productId"
+                    control={itemForm.control}
+                    render={({ field }) => (
+                      <ProductSearchCombobox
+                        products={products || []}
+                        value={field.value}
+                        filterCategory={selectedCategory}
+                        disabled={productsLoading}
+                        priceType="sellingPrice"
+                        placeholder="Search by name, part no, barcode..."
+                        onSelect={(p) => {
+                          field.onChange(p ? p.id : '');
+                          if (p) {
+                            itemForm.setValue('customPrice', p.sellingPrice);
+                          } else {
+                            itemForm.setValue('customPrice', undefined);
+                          }
+                        }}
+                      />
+                    )}
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <Label className="text-xs">Unit Price (₹)</Label>
+                  <Controller
+                    name="customPrice"
+                    control={itemForm.control}
+                    render={({ field }) => (
+                      <Input
+                        type="number"
+                        step="any"
+                        min="0"
+                        placeholder="Rate"
+                        className="font-mono text-xs"
+                        value={field.value ?? ''}
+                        onChange={(e) => field.onChange(e.target.value === '' ? undefined : parseFloat(e.target.value) || 0)}
+                      />
+                    )}
+                  />
+                </div>
+                <div className="sm:col-span-1">
+                  <Label className="text-xs">Qty</Label>
+                  <Controller
+                    name="quantity"
+                    control={itemForm.control}
+                    render={({ field }) => (
+                      <Input
+                        type="number"
+                        min="0.001"
+                        step="any"
+                        placeholder="1"
+                        className="font-mono text-xs text-center px-1"
+                        {...field}
+                      />
+                    )}
+                  />
+                </div>
+                <div className="flex items-end sm:col-span-2">
+                  <Button type="submit" className="w-full font-semibold">
+                    <PlusCircle className="mr-1.5 h-4 w-4" /> Add Item
+                  </Button>
+                </div>
+              </form>
             </CardContent>
           </Card>
           <Card>
@@ -1033,11 +1037,11 @@ export default function NewInvoicePage() {
                 </TableHeader>
                 <TableBody>
                   {items.length === 0 && (
-                      <TableRow>
-                          <TableCell colSpan={5} className="text-center text-muted-foreground py-8 text-xs">
-                              No items added yet. Search a product or service above or scan barcode to add.
-                          </TableCell>
-                      </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8 text-xs">
+                        No items added yet. Search a product or service above or scan barcode to add.
+                      </TableCell>
+                    </TableRow>
                   )}
                   {items.map((item, index) => (
                     <TableRow key={index} className="hover:bg-muted/30">
@@ -1201,13 +1205,13 @@ export default function NewInvoicePage() {
                     <div className="relative mt-1">
                       <Input
                         id="customer-name"
-                        placeholder="Type name or search existing customer..."
+                        placeholder="Walk-in Customer"
                         value={customerName}
                         onChange={(e) => {
                           setCustomerName(e.target.value);
                           setShowSuggestions(true);
                         }}
-                        onFocus={() => setShowSuggestions(true)}
+                        onFocus={(e) => { e.target.select(); setShowSuggestions(true); }}
                         autoComplete="off"
                       />
                     </div>
@@ -1268,7 +1272,7 @@ export default function NewInvoicePage() {
                     />
                   </div>
 
-                  {customerName.trim() && (
+                  {customerName.trim() && customerName.trim() !== 'Walk-in Customer' && (
                     <div className="flex items-center space-x-2 pt-1 border-t">
                       <input
                         type="checkbox"
@@ -1286,17 +1290,17 @@ export default function NewInvoicePage() {
               )}
             </CardContent>
           </Card>
-           <Card>
+          <Card>
             <CardHeader>
               <CardTitle>Payment Details</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="grid gap-2">
                 <Label>Payment Status</Label>
-                <RadioGroup 
-                    value={paymentStatus} 
-                    onValueChange={(value: 'Paid' | 'Partial' | 'Pending') => setPaymentStatus(value)}
-                    className="flex gap-4"
+                <RadioGroup
+                  value={paymentStatus}
+                  onValueChange={(value: 'Paid' | 'Partial' | 'Pending') => setPaymentStatus(value)}
+                  className="flex gap-4"
                 >
                   <div className="flex items-center space-x-2">
                     <RadioGroupItem value="Paid" id="status-paid" />
@@ -1326,36 +1330,58 @@ export default function NewInvoicePage() {
                   />
                 </div>
               )}
-               <div className="grid gap-2">
+              <div className="grid gap-2">
                 <Label>Payment Mode</Label>
                 <Select value={paymentMode} onValueChange={(value: 'Cash' | 'UPI' | 'Bank Transfer') => setPaymentMode(value)}>
-                    <SelectTrigger>
-                        <SelectValue placeholder="Select payment mode" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="Cash">Cash</SelectItem>
-                        <SelectItem value="UPI">UPI</SelectItem>
-                        <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-                    </SelectContent>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select payment mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Cash">Cash</SelectItem>
+                    <SelectItem value="UPI">UPI</SelectItem>
+                    <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                  </SelectContent>
                 </Select>
-               </div>
+              </div>
             </CardContent>
           </Card>
           <Card>
-            <CardHeader>
-              <CardTitle>Summary</CardTitle>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center justify-between">
+                <span>Summary</span>
+                {/* GST Included Toggle */}
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    id="gst-included"
+                    checked={gstIncluded}
+                    onChange={(e) => setGstIncluded(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary accent-primary"
+                  />
+                  <span className="text-xs font-normal text-muted-foreground">
+                    GST Included
+                  </span>
+                </label>
+              </CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="font-mono">₹{formatCurrency(subtotal)}</span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">GST</span>
-                <span className="font-mono">
-                  ₹{formatCurrency(gstAmount)}
-                </span>
-              </div>
+              {gstIncluded ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground text-sm">GST</span>
+                  <span className="font-mono">
+                    ₹{formatCurrency(gstAmount)}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between text-xs text-muted-foreground/60">
+                  <span>GST (excluded)</span>
+                  <span className="font-mono line-through">₹{formatCurrency(items.reduce((s, i) => s + (i.total * i.gstPercentage / 100), 0))}</span>
+                </div>
+              )}
               {/* Optional Discount / Bargain */}
               <div className="grid gap-1 pt-1 border-t">
                 <div className="flex items-center justify-between">
